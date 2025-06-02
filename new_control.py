@@ -1,296 +1,370 @@
-import pygame
 import serial
 import struct
 import time
 import sys
+import pygame # pygame est utilisé pour la manette
 
-# --- Configuration ---
-# ATTENTION: Adaptez SERIAL_PORT au port série de votre Raspberry Pi connecté au FC
-# Exemples: '/dev/ttyS0', '/dev/serial0', '/dev/ttyAMA0', '/dev/ttyUSB0'
-# Vérifiez quel UART de votre FC (UART1 ou UART5 selon votre dump) est connecté au RPi
-SERIAL_PORT = '/dev/serial0'  # À MODIFIER SI NÉCESSAIRE
+# --- Configuration Globale ---
+ENABLE_THROTTLE_TEST_LIMIT = True # Mettre à False pour utiliser la pleine poussée (1000-2000)
+THROTTLE_MIN_VALUE = 1000 # Valeur minimale absolue pour les gaz (correspond à min_command)
+THROTTLE_MAX_VALUE = 2000 # Valeur maximale absolue pour les gaz
+
+# Définir les limites effectives des gaz en fonction du mode test
+THROTTLE_MIN_EFFECTIVE = THROTTLE_MIN_VALUE
+THROTTLE_MAX_EFFECTIVE = THROTTLE_MAX_VALUE
+if ENABLE_THROTTLE_TEST_LIMIT:
+    THROTTLE_MAX_EFFECTIVE = 1600 # Limite pour les tests, ajustez si besoin
+
+# --- Configuration et Constantes MSP ---
+SERIAL_PORT = '/dev/ttyAMA0'  # VÉRIFIEZ CECI ! Doit correspondre à l'UART connecté au FC
 BAUD_RATE = 115200
+MSP_SET_RAW_RC = 200
+MSP_ALTITUDE = 109 # Pour affichage uniquement
 
-# Valeurs RC (basées sur votre dump)
-RC_MIN = 1000
-RC_MID = 1500
-RC_MAX = 2000
-THROTTLE_MIN_ARMED = 1070 # min_throttle de votre dump
-THROTTLE_MAX_TEST_MODE = 1500
+# --- Configuration du Contrôle ---
+# Betaflight map AETR1234: Ch1=Roll, Ch2=Pitch, Ch3=Throttle, Ch4=Yaw, Ch5=AUX1...
+# Indices Python (0-based):
+RC_CHAN_ROLL = 0
+RC_CHAN_PITCH = 1
+RC_CHAN_THROTTLE = 2
+RC_CHAN_YAW = 3
+RC_CHAN_AUX1_ARM = 4
+RC_CHAN_AUX2_ANGLE_MODE = 5
+# RC_CHAN_AUX3 = 6
+# RC_CHAN_AUX4 = 7
+RC_CHANNELS_COUNT = 8 # Envoyer 8 canaux, même si seuls les 6 premiers sont activement utilisés
 
-# Canaux RC (0-indexed) selon map AETR1234
-# Roll, Pitch, Throttle, Yaw, Aux1, Aux2, Aux3, Aux4 ...
-# Betaflight attend 8 canaux minimum pour MSP_SET_RAW_RC, peut en gérer jusqu'à 18
-NUM_RC_CHANNELS = 8 # Nous enverrons 8 canaux
+# Initialisation des valeurs RC
+current_rc_values = [1500] * RC_CHANNELS_COUNT
+current_rc_values[RC_CHAN_THROTTLE] = THROTTLE_MIN_EFFECTIVE # Throttle bas au démarrage
+current_rc_values[RC_CHAN_AUX1_ARM] = 1000  # AUX1 (Arm switch) désarmé (valeur basse)
 
-# Mapping des canaux Betaflight (AETR1234)
-# Betaflight Channel Order (0-indexed for our array)
-CH_ROLL = 0
-CH_PITCH = 1
-CH_THROTTLE = 2
-CH_YAW = 3
-CH_AUX1 = 4 # Arm/Disarm
-CH_AUX2 = 5 # Mode (non utilisé activement ici, mis à MID)
-CH_AUX3 = 6 # (non utilisé activement ici, mis à MID)
-CH_AUX4 = 7 # (non utilisé activement ici, mis à MID)
+# Valeurs pour les switchs AUX
+ARM_VALUE = 1800       # Valeur pour armer (dans la plage 1525-2100 de Betaflight)
+DISARM_VALUE = 1000    # Valeur pour désarmer
 
-# Valeurs pour AUX1 (Arm/Disarm)
-AUX_ARM_VALUE = 1800  # Doit être dans la plage 1525-2100 de votre dump
-AUX_DISARM_VALUE = 1000 # Doit être en dehors de la plage 1525-2100
+ANGLE_MODE_ON_VALUE = 1800  # Valeur pour activer le mode Angle (dans la plage 1525-2100)
+ANGLE_MODE_OFF_VALUE = 1000 # Valeur pour désactiver le mode Angle (Acro par défaut)
 
-# --- Initialisation Pygame ---
-pygame.init()
-pygame.joystick.init()
+THROTTLE_SAFETY_ARM_MAX = THROTTLE_MIN_EFFECTIVE + 50 # Gaz doivent être en dessous pour armer
 
-if pygame.joystick.get_count() == 0:
-    print("Aucune manette détectée !")
-    sys.exit()
+# État du drone
+is_armed_command = False
+angle_mode_active = True # Activer le mode Angle par défaut pour la sécurité
+current_rc_values[RC_CHAN_AUX2_ANGLE_MODE] = ANGLE_MODE_ON_VALUE if angle_mode_active else ANGLE_MODE_OFF_VALUE
 
-joystick = pygame.joystick.Joystick(0)
-joystick.init()
-print(f"Manette détectée : {joystick.get_name()}")
+# --- Configuration Verrouillage Yaw ---
+yaw_locked = True
+YAW_LOCK_VALUE = 1500
+current_rc_values[RC_CHAN_YAW] = YAW_LOCK_VALUE
 
-# Mapping des axes et boutons de la manette (selon votre description)
-# joystick gauche: gauche droite = axe 0, haut bas = axe 1
-# joystick droit: gauche droite = axe 3, haut bas = axe 4
-# bouton L1 = bouton 4 (arm/disarm)
-# bouton R1 = bouton 5 (emergency stop)
-# bouton X = bouton 2 (non utilisé ici)
-# bouton Y = bouton 3 (yaw lock toggle)
-# bouton A = bouton 0 (test mode toggle)
-# bouton B = bouton 1 (non utilisé ici)
+# --- Configuration Manette ---
+# ATTENTION: Ces axes peuvent varier selon votre manette.
+# Utilisez `pygame.examples.joystick` ou un outil similaire pour les identifier.
+AXIS_ROLL = 3       # Joystick Droit X (pour Roll)
+AXIS_PITCH = 4      # Joystick Droit Y (pour Pitch) - Inverser si besoin dans map_axis_to_rc
+AXIS_YAW = 0        # Joystick Gauche X (pour Yaw)
+AXIS_THROTTLE = 1   # Joystick Gauche Y (pour Throttle) - Inverser si besoin
 
-AXIS_YAW = 0        # Joystick gauche horizontal
-AXIS_THROTTLE = 1   # Joystick gauche vertical
-AXIS_ROLL = 3       # Joystick droit horizontal
-AXIS_PITCH = 4      # Joystick droit vertical
+BUTTON_ARM_DISARM = 4      # L1/LB
+BUTTON_TOGGLE_ANGLE_MODE = 0 # Souvent Bouton A (Xbox) ou X (Playstation)
+BUTTON_TOGGLE_YAW_LOCK = 6 # R1/RB
+BUTTON_QUIT = 5            # L2/LT (peut être un axe sur certaines manettes, ajustez)
 
-BUTTON_ARM_DISARM = 4 # L1
-BUTTON_EMERGENCY_STOP = 5 # R1
-BUTTON_YAW_LOCK = 3   # Y
-BUTTON_TEST_MODE = 0  # A
+JOYSTICK_DEADZONE = 0.08
 
-# --- Initialisation Série ---
-try:
-    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1) # timeout réduit pour ne pas bloquer
-    print(f"Port série {SERIAL_PORT} ouvert à {BAUD_RATE} bauds.")
-except serial.SerialException as e:
-    print(f"Erreur à l'ouverture du port série {SERIAL_PORT}: {e}")
-    print("Vérifiez que le port est correct, non utilisé par une autre application (ex: Betaflight Configurator),")
-    print("et que vous avez les permissions (ajoutez votre utilisateur au groupe 'dialout': sudo usermod -a -G dialout $USER).")
-    pygame.quit()
-    sys.exit()
+# --- Variables pour MSP et Pygame ---
+current_altitude_m = None
+last_msp_request_time = 0
+MSP_REQUEST_INTERVAL = 0.1 # Demander l'altitude toutes les 100ms
+
+joystick = None
+joystick_connected = False
 
 # --- Fonctions MSP ---
-MSP_SET_RAW_RC = 200
+def calculate_checksum(payload_bytes):
+    chk = 0
+    for b_val in payload_bytes:
+        chk ^= b_val
+    return chk
 
-def send_msp_command(command_id, data):
-    payload_size = len(data)
-    header = struct.pack('<3sBB', b'$M<', payload_size, command_id)
-    payload_format = '<' + 'H' * (payload_size // 2) # H for unsigned short (2 bytes)
-    payload_bytes = struct.pack(payload_format, *data)
-
-    checksum = 0
-    checksum ^= payload_size
-    checksum ^= command_id
-    for byte_val in payload_bytes:
-        checksum ^= byte_val
-
-    checksum_byte = struct.pack('<B', checksum)
-    message = header + payload_bytes + checksum_byte
-    
+def send_msp_packet(ser_conn, command, data_payload):
+    payload_size = len(data_payload) if data_payload else 0
+    header = b'$M<'
+    msp_payload_header = struct.pack('<BB', payload_size, command)
+    full_msp_payload = msp_payload_header + (data_payload if data_payload else b'')
+    checksum_val = calculate_checksum(full_msp_payload)
+    packet = header + full_msp_payload + struct.pack('<B', checksum_val)
     try:
-        ser.write(message)
-    except serial.SerialException as e:
+        ser_conn.write(packet)
+    except Exception as e:
         print(f"Erreur d'écriture série: {e}")
-        # Potentiellement gérer la réouverture du port ou l'arrêt propre
 
-# --- Variables d'état ---
-armed = False
-yaw_locked = True # Yaw bloqué par défaut
-test_mode_active = False
-emergency_stop_engaged = False
+def request_msp_data(ser_conn, command):
+    send_msp_packet(ser_conn, command, None)
 
-# Pour la détection de front des boutons (éviter actions multiples)
-prev_button_arm_disarm_state = False
-prev_button_yaw_lock_state = False
-prev_button_test_mode_state = False
+def parse_msp_response(ser_buffer_local):
+    global current_altitude_m
+    # Recherche du début d'un message MSP valide
+    idx = ser_buffer_local.find(b'$M>')
+    if idx == -1:
+        return ser_buffer_local # Pas de début de message trouvé
 
-# Initial RC values
-rc_channels = [RC_MID] * NUM_RC_CHANNELS
-rc_channels[CH_THROTTLE] = RC_MIN
-rc_channels[CH_AUX1] = AUX_DISARM_VALUE
+    # Vérifier si on a assez de données pour lire l'entête du payload
+    if len(ser_buffer_local) < idx + 5: # $M> + size + cmd
+        return ser_buffer_local[idx:] # Garder le début partiel pour la prochaine fois
 
-# --- Boucle principale ---
-running = True
-print("\nDébut du contrôle. Appuyez sur L1 pour armer (gaz à zéro!). R1 pour arrêt d'urgence.")
-print("Y pour bloquer/débloquer le Yaw. A pour activer/désactiver le mode test (poussée limitée).")
+    payload_size = ser_buffer_local[idx+3]
+    cmd = ser_buffer_local[idx+4]
 
-try:
-    while running:
-        pygame.event.pump() # Important pour que Pygame traite les événements internes
+    # Vérifier si on a assez de données pour lire le payload complet et le checksum
+    if len(ser_buffer_local) < idx + 5 + payload_size + 1: # + checksum
+        return ser_buffer_local[idx:] # Pas assez de données, garder pour la prochaine fois
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            # Gérer la déconnexion de la manette (optionnel mais recommandé pour la robustesse)
-            # if event.type == pygame.JOYDEVICEREMOVED:
-            #     print("Manette déconnectée !")
-            #     running = False # Ou engager un failsafe
+    # Extraire le payload et le checksum
+    full_packet_payload_bytes = ser_buffer_local[idx+3 : idx+5+payload_size] # size, cmd, data
+    received_checksum = ser_buffer_local[idx+5+payload_size]
+    
+    calculated_checksum = calculate_checksum(full_packet_payload_bytes)
 
-        # --- Lecture des boutons ---
-        current_button_arm_disarm_state = joystick.get_button(BUTTON_ARM_DISARM)
-        current_button_yaw_lock_state = joystick.get_button(BUTTON_YAW_LOCK)
-        current_button_test_mode_state = joystick.get_button(BUTTON_TEST_MODE)
-        emergency_stop_pressed = joystick.get_button(BUTTON_EMERGENCY_STOP)
+    if received_checksum == calculated_checksum:
+        payload_data_bytes = ser_buffer_local[idx+5 : idx+5+payload_size] # Uniquement les données
+        if cmd == MSP_ALTITUDE and payload_size >= 4:
+            # L'altitude est un entier signé de 32 bits en cm
+            altitude_cm = struct.unpack('<i', payload_data_bytes[0:4])[0]
+            current_altitude_m = float(altitude_cm) / 100.0
+        # Consommer le message traité du buffer
+        return ser_buffer_local[idx + 5 + payload_size + 1:]
+    else:
+        # Checksum invalide, jeter le début du message et essayer de resynchroniser
+        print("MSP Checksum error")
+        return ser_buffer_local[idx+1:]
 
-        # --- Logique de contrôle ---
 
-        # 1. Arrêt d'urgence (R1) - Priorité maximale
-        if emergency_stop_pressed:
-            if not emergency_stop_engaged:
-                print("ARRÊT D'URGENCE ENGAGÉ !")
-                emergency_stop_engaged = True
-            armed = False
-            rc_channels[CH_THROTTLE] = RC_MIN
-            rc_channels[CH_AUX1] = AUX_DISARM_VALUE
-            # Forcer les autres commandes à neutre pour la sécurité
-            rc_channels[CH_ROLL] = RC_MID
-            rc_channels[CH_PITCH] = RC_MID
-            rc_channels[CH_YAW] = RC_MID
-            send_msp_command(MSP_SET_RAW_RC, rc_channels[:NUM_RC_CHANNELS])
-            time.sleep(0.02) # 50Hz
-            continue # Passer le reste de la boucle si arrêt d'urgence
-        elif emergency_stop_engaged and not emergency_stop_pressed:
-            # L'arrêt d'urgence reste engagé jusqu'à ce que l'utilisateur ré-arme explicitement
-            # ou que le script soit redémarré. Pour l'instant, on le désengage si le bouton est relâché
-            # MAIS le drone reste désarmé.
-            print("Arrêt d'urgence relâché, drone reste DÉSARMÉ.")
-            emergency_stop_engaged = False # Permet de reprendre le contrôle normal après relâchement
+# --- Logique de Contrôle Manette ---
+def map_axis_to_rc(axis_value, min_rc=1000, max_rc=2000, invert_axis=False):
+    if abs(axis_value) < JOYSTICK_DEADZONE:
+        axis_value = 0.0
+    if invert_axis:
+        axis_value = -axis_value
+    # Normaliser l'axe de -1..1 à 0..1
+    normalized_value = (axis_value + 1.0) / 2.0
+    return int(min_rc + normalized_value * (max_rc - min_rc))
 
-        # 2. Armement/Désarmement (L1)
-        if current_button_arm_disarm_state and not prev_button_arm_disarm_state:
-            # Lire la position actuelle du stick des gaz
-            throttle_stick_value_raw = joystick.get_axis(AXIS_THROTTLE) # -1 (haut) à 1 (bas)
-            # Convertir en % (0% en bas, 100% en haut)
-            throttle_stick_percentage = (-throttle_stick_value_raw + 1) / 2 
+def handle_joystick_event(event):
+    global current_rc_values, is_armed_command, joystick, joystick_connected
+    global angle_mode_active, yaw_locked
 
-            if not armed:
-                if throttle_stick_percentage < 0.05: # Gaz à moins de 5% pour armer
-                    armed = True
-                    rc_channels[CH_AUX1] = AUX_ARM_VALUE
-                    print("DRONE ARMÉ")
+    if event.type == pygame.JOYAXISMOTION:
+        if event.axis == AXIS_THROTTLE:
+            # Le throttle est souvent inversé sur les manettes (haut = -1.0)
+            current_rc_values[RC_CHAN_THROTTLE] = map_axis_to_rc(event.value, 
+                                                                 min_rc=THROTTLE_MIN_EFFECTIVE, 
+                                                                 max_rc=THROTTLE_MAX_EFFECTIVE, 
+                                                                 invert_axis=True)
+        elif event.axis == AXIS_YAW:
+            if not yaw_locked:
+                current_rc_values[RC_CHAN_YAW] = map_axis_to_rc(event.value)
+        elif event.axis == AXIS_ROLL:
+            current_rc_values[RC_CHAN_ROLL] = map_axis_to_rc(event.value)
+        elif event.axis == AXIS_PITCH:
+            # Le pitch peut aussi nécessiter une inversion selon la manette/préférence
+            current_rc_values[RC_CHAN_PITCH] = map_axis_to_rc(event.value, invert_axis=False)
+
+    if yaw_locked: # S'assurer que le yaw reste verrouillé si actif
+        current_rc_values[RC_CHAN_YAW] = YAW_LOCK_VALUE
+
+    if event.type == pygame.JOYBUTTONDOWN:
+        if event.button == BUTTON_ARM_DISARM:
+            if not is_armed_command:
+                if current_rc_values[RC_CHAN_THROTTLE] <= THROTTLE_SAFETY_ARM_MAX:
+                    current_rc_values[RC_CHAN_AUX1_ARM] = ARM_VALUE
+                    is_armed_command = True
+                    print("\nCOMMANDE: ARMEMENT")
                 else:
-                    print("Impossible d'armer : Gaz non à zéro !")
+                    print(f"\nSECURITE: Gaz ({current_rc_values[RC_CHAN_THROTTLE]}) trop hauts pour armer (max {THROTTLE_SAFETY_ARM_MAX}).")
             else:
-                armed = False
-                rc_channels[CH_AUX1] = AUX_DISARM_VALUE
-                print("DRONE DÉSARMÉ")
-        prev_button_arm_disarm_state = current_button_arm_disarm_state
+                current_rc_values[RC_CHAN_AUX1_ARM] = DISARM_VALUE
+                is_armed_command = False
+                current_rc_values[RC_CHAN_THROTTLE] = THROTTLE_MIN_EFFECTIVE # Couper les gaz au désarmement
+                print("\nCOMMANDE: DESARMEMENT")
 
-        # 3. Yaw Lock (Y)
-        if current_button_yaw_lock_state and not prev_button_yaw_lock_state:
+        elif event.button == BUTTON_TOGGLE_ANGLE_MODE:
+            angle_mode_active = not angle_mode_active
+            current_rc_values[RC_CHAN_AUX2_ANGLE_MODE] = ANGLE_MODE_ON_VALUE if angle_mode_active else ANGLE_MODE_OFF_VALUE
+            print(f"\nINFO: Mode Angle {'ACTIVÉ' if angle_mode_active else 'DÉSACTIVÉ (ACRO)'}")
+
+        elif event.button == BUTTON_TOGGLE_YAW_LOCK:
             yaw_locked = not yaw_locked
-            print(f"Yaw Lock : {'Activé' if yaw_locked else 'Désactivé'}")
-        prev_button_yaw_lock_state = current_button_yaw_lock_state
+            if yaw_locked:
+                current_rc_values[RC_CHAN_YAW] = YAW_LOCK_VALUE
+                print("\nINFO: Yaw VERROUILLÉ")
+            else:
+                # Au déverrouillage, le yaw prendra la valeur du stick au prochain JOYAXISMOTION
+                print("\nINFO: Yaw DÉVERROUILLÉ")
 
-        # 4. Test Mode (A)
-        if current_button_test_mode_state and not prev_button_test_mode_state:
-            test_mode_active = not test_mode_active
-            print(f"Mode Test (Poussée limitée à {THROTTLE_MAX_TEST_MODE}µs) : {'Activé' if test_mode_active else 'Désactivé'}")
-        prev_button_test_mode_state = current_button_test_mode_state
+        elif event.button == BUTTON_QUIT:
+            return "quit"
+
+    elif event.type == pygame.JOYDEVICEADDED:
+        if pygame.joystick.get_count() > 0:
+            joystick = pygame.joystick.Joystick(0)
+            joystick.init()
+            joystick_connected = True
+            print(f"\nManette '{joystick.get_name()}' connectée.")
+    elif event.type == pygame.JOYDEVICEREMOVED:
+        joystick_connected = False
+        joystick = None
+        print("\nManette déconnectée. Désarmement et gaz au minimum.")
+        current_rc_values[RC_CHAN_THROTTLE] = THROTTLE_MIN_EFFECTIVE
+        current_rc_values[RC_CHAN_AUX1_ARM] = DISARM_VALUE
+        is_armed_command = False
+        # Optionnel: remettre le yaw lock et angle mode par défaut
+        yaw_locked = True
+        current_rc_values[RC_CHAN_YAW] = YAW_LOCK_VALUE
+        angle_mode_active = True
+        current_rc_values[RC_CHAN_AUX2_ANGLE_MODE] = ANGLE_MODE_ON_VALUE
+
+    return None
+
+def print_status():
+    # Efface la ligne précédente pour une impression propre
+    sys.stdout.write("\033[K")
+    
+    alt_str = f"{current_altitude_m:.2f}m" if current_altitude_m is not None else "N/A"
+    arm_str = "ARMED" if is_armed_command else "DISARMED"
+    angle_str = "ANGLE" if angle_mode_active else "ACRO"
+    yaw_l_str = "LOCKED" if yaw_locked else "UNLOCKED"
+    thr_mode_str = "TEST" if ENABLE_THROTTLE_TEST_LIMIT else "FULL"
+
+    status_line = (
+        f"T:{current_rc_values[RC_CHAN_THROTTLE]}({thr_mode_str}) "
+        f"R:{current_rc_values[RC_CHAN_ROLL]} P:{current_rc_values[RC_CHAN_PITCH]} Y:{current_rc_values[RC_CHAN_YAW]}({yaw_l_str}) | "
+        f"{arm_str} (AUX1:{current_rc_values[RC_CHAN_AUX1_ARM]}) | "
+        f"{angle_str} (AUX2:{current_rc_values[RC_CHAN_AUX2_ANGLE_MODE]}) | "
+        f"Alt:{alt_str}"
+    )
+    print(status_line, end="\r")
+    sys.stdout.flush()
+
+def main():
+    global current_rc_values, is_armed_command, joystick, joystick_connected
+    global last_msp_request_time, current_altitude_m, ser_buffer
+    global angle_mode_active, yaw_locked # Assurer qu'elles sont globales
+
+    print("--- Script Contrôle Drone MSP Simplifié (Angle Mode + Yaw Lock) ---")
+    if ENABLE_THROTTLE_TEST_LIMIT:
+        print(f"!!! MODE TEST THROTTLE ACTIF: {THROTTLE_MIN_EFFECTIVE}-{THROTTLE_MAX_EFFECTIVE} !!!")
+    else:
+        print(f"!!! MODE PLEINE POUSSÉE ACTIF: {THROTTLE_MIN_EFFECTIVE}-{THROTTLE_MAX_EFFECTIVE} !!!")
+    print(f"Vérifiez vos assignations de boutons/axes de manette!")
+    print(f"Port série: {SERIAL_PORT} à {BAUD_RATE} bauds.")
+    print("Appuyez sur le bouton 'QUIT' pour arrêter.")
+
+    pygame.init()
+    pygame.joystick.init()
+    if pygame.joystick.get_count() > 0:
+        joystick = pygame.joystick.Joystick(0)
+        joystick.init()
+        joystick_connected = True
+        print(f"Manette '{joystick.get_name()}' connectée.")
+    else:
+        print("Aucune manette détectée. Le script ne pourra pas envoyer de commandes RC.")
+        # On pourrait quitter ici, mais laissons-le tourner pour voir les messages MSP si le port série s'ouvre.
+
+    ser_buffer = b''
+    ser = None # Initialiser à None
+    try:
+        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.01) # timeout non bloquant
+        print(f"Port série {SERIAL_PORT} ouvert.")
+    except serial.SerialException as e:
+        print(f"Erreur à l'ouverture du port série {SERIAL_PORT}: {e}")
+        print("Le script va continuer sans communication série (pour démo manette).")
+        # pygame.quit() # Décommentez si vous voulez quitter si le port série échoue
+        # return
+
+    running = True
+    try:
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: # Permet de fermer la fenêtre Pygame si elle existe
+                    running = False; break
+                if joystick_connected: # Traiter les événements de la manette seulement si elle est connectée
+                    if handle_joystick_event(event) == "quit":
+                        running = False; break
+            if not running:
+                break
+
+            current_time = time.time()
+            if ser and ser.is_open and (current_time - last_msp_request_time > MSP_REQUEST_INTERVAL):
+                request_msp_data(ser, MSP_ALTITUDE)
+                last_msp_request_time = current_time
+            
+            if ser and ser.is_open and ser.in_waiting > 0:
+                ser_buffer += ser.read(ser.in_waiting)
+            
+            if ser_buffer: # Ne parser que s'il y a des données
+                 ser_buffer = parse_msp_response(ser_buffer)
+
+
+            # S'assurer que les valeurs RC sont dans les limites 1000-2000
+            # Le throttle est déjà géré par map_axis_to_rc avec THROTTLE_MIN/MAX_EFFECTIVE
+            current_rc_values[RC_CHAN_THROTTLE] = max(THROTTLE_MIN_VALUE, min(THROTTLE_MAX_VALUE, current_rc_values[RC_CHAN_THROTTLE]))
+            for i in [RC_CHAN_ROLL, RC_CHAN_PITCH, RC_CHAN_YAW, RC_CHAN_AUX1_ARM, RC_CHAN_AUX2_ANGLE_MODE]:
+                 current_rc_values[i] = max(1000, min(2000, current_rc_values[i]))
+            # Les autres canaux AUX restent à 1500 par défaut
+
+            if joystick_connected: # N'envoyer des commandes que si la manette est là
+                if ser and ser.is_open:
+                    payload_rc = b''.join(struct.pack('<H', int(val)) for val in current_rc_values[:RC_CHANNELS_COUNT])
+                    send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc)
+                print_status()
+            else:
+                # Si la manette n'est pas connectée, afficher un message et ne pas envoyer de commandes RC
+                # Les valeurs RC de sécurité (désarmé, gaz bas) sont définies dans JOYDEVICEREMOVED
+                sys.stdout.write("\033[K") # Efface la ligne
+                print("Manette déconnectée... Attente de reconnexion.", end="\r")
+                sys.stdout.flush()
+                # S'assurer que le drone est désarmé si la manette se déconnecte en vol
+                if is_armed_command:
+                    print("\nURGENCE: Manette déconnectée en vol! Tentative de désarmement.")
+                    current_rc_values[RC_CHAN_THROTTLE] = THROTTLE_MIN_EFFECTIVE
+                    current_rc_values[RC_CHAN_AUX1_ARM] = DISARM_VALUE
+                    is_armed_command = False
+                    if ser and ser.is_open:
+                        payload_rc = b''.join(struct.pack('<H', int(val)) for val in current_rc_values[:RC_CHANNELS_COUNT])
+                        send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc) # Envoyer une dernière commande de désarmement
+
+
+            time.sleep(0.02) # Boucle de contrôle à environ 50Hz
+
+    except KeyboardInterrupt:
+        print("\nArrêt demandé par l'utilisateur (Ctrl+C).")
+    except Exception as e:
+        print(f"\nErreur inattendue dans la boucle principale: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("\nNettoyage et commandes de sécurité finales...")
+        # Préparer un paquet de désarmement final
+        final_rc_values = [1500] * RC_CHANNELS_COUNT
+        final_rc_values[RC_CHAN_THROTTLE] = THROTTLE_MIN_EFFECTIVE
+        final_rc_values[RC_CHAN_AUX1_ARM] = DISARM_VALUE # Désarmé
+        final_rc_values[RC_CHAN_YAW] = YAW_LOCK_VALUE # Yaw neutre/verrouillé
+        final_rc_values[RC_CHAN_AUX2_ANGLE_MODE] = ANGLE_MODE_ON_VALUE # Angle mode ON pour sécurité
         
-        # --- Lecture des Axes ---
-        # Joystick gauche vertical (Throttle): axe 1. Manette -1 (haut) à +1 (bas)
-        # Inverser et mapper: -1 (haut manette) -> RC_MAX, +1 (bas manette) -> RC_MIN
-        raw_throttle = joystick.get_axis(AXIS_THROTTLE)
-        rc_throttle = int(RC_MIN + ((-raw_throttle + 1) / 2) * (RC_MAX - RC_MIN))
+        payload_final = b''.join(struct.pack('<H', int(v)) for v in final_rc_values[:RC_CHANNELS_COUNT])
 
-        # Joystick gauche horizontal (Yaw): axe 0. Manette -1 (gauche) à +1 (droite)
-        # Mapper: -1 -> RC_MIN, 0 -> RC_MID, +1 -> RC_MAX
-        raw_yaw = joystick.get_axis(AXIS_YAW)
-        rc_yaw = int(RC_MID + (raw_yaw / 2) * (RC_MAX - RC_MIN)) # /2 car l'amplitude est de RC_MID à RC_MAX ou RC_MIN
-
-        # Joystick droit vertical (Pitch): axe 4. Manette -1 (haut) à +1 (bas)
-        # Stick haut = drone avance (pique du nez). Betaflight: valeur RC plus élevée pour Pitch = cabrer.
-        # Donc, -1 (haut manette) -> RC_MAX (pitch arrière/cabrer), +1 (bas manette) -> RC_MIN (pitch avant/piquer)
-        # Si on veut stick haut = piquer du nez (plus intuitif pour certains):
-        # -1 (haut manette) -> RC_MIN (piquer), +1 (bas manette) -> RC_MAX (cabrer)
-        # Je vais utiliser: stick haut = piquer du nez (valeur RC basse)
-        raw_pitch = joystick.get_axis(AXIS_PITCH)
-        # rc_pitch = int(RC_MID + ((-raw_pitch / 2) * (RC_MAX - RC_MIN))) # Stick haut = RC_MAX (cabrer)
-        rc_pitch = int(RC_MID + ((raw_pitch / 2) * (RC_MAX - RC_MIN))) # Stick haut = RC_MIN (piquer)
-                                                                      # Correction: raw_pitch est -1 (haut) à 1 (bas)
-                                                                      # (-raw_pitch + 1)/2 -> 1 (haut) à 0 (bas)
-                                                                      # Donc pour stick haut = piquer (RC_MIN)
-                                                                      # et stick bas = cabrer (RC_MAX)
-                                                                      # rc_pitch = int(RC_MIN + ((-raw_pitch + 1) / 2) * (RC_MAX - RC_MIN))
-                                                                      # Non, c'est l'inverse.
-                                                                      # Si raw_pitch = -1 (haut), on veut RC_MIN (ou proche de RC_MIN pour piquer)
-                                                                      # Si raw_pitch = 1 (bas), on veut RC_MAX (ou proche de RC_MAX pour cabrer)
-                                                                      # Donc: (raw_pitch + 1)/2 -> 0 (haut) à 1 (bas)
-                                                                      # rc_pitch = int(RC_MIN + ((raw_pitch + 1) / 2) * (RC_MAX - RC_MIN))
-                                                                      # Testons: raw_pitch = -1 (haut) => (0/2) * (delta) + RC_MIN = RC_MIN (piquer)
-                                                                      #          raw_pitch =  1 (bas) => (2/2) * (delta) + RC_MIN = RC_MAX (cabrer)
-                                                                      #          raw_pitch =  0 (milieu) => (1/2) * (delta) + RC_MIN = RC_MID
-        rc_pitch = int(RC_MIN + ((raw_pitch + 1) / 2) * (RC_MAX - RC_MIN))
-
-
-        # Joystick droit horizontal (Roll): axe 3. Manette -1 (gauche) à +1 (droite)
-        # Mapper: -1 -> RC_MIN, 0 -> RC_MID, +1 -> RC_MAX
-        raw_roll = joystick.get_axis(AXIS_ROLL)
-        rc_roll = int(RC_MID + (raw_roll / 2) * (RC_MAX - RC_MIN))
-
-        # --- Application des logiques spécifiques ---
-        if yaw_locked:
-            rc_yaw = RC_MID
-
-        if not armed:
-            rc_throttle = RC_MIN # Sécurité: si désarmé, gaz au minimum
-        else:
-            # S'assurer que les gaz ne descendent pas en dessous de min_throttle quand armé
-            # (sauf si on veut couper les moteurs en vol, ce qui est géré par le désarmement)
-            if rc_throttle < THROTTLE_MIN_ARMED :
-                 rc_throttle = THROTTLE_MIN_ARMED
-            # Appliquer la limite du mode test si actif
-            if test_mode_active:
-                rc_throttle = min(rc_throttle, THROTTLE_MAX_TEST_MODE)
-
-
-        # --- Assemblage des canaux RC ---
-        rc_channels[CH_ROLL] = rc_roll
-        rc_channels[CH_PITCH] = rc_pitch
-        rc_channels[CH_THROTTLE] = rc_throttle
-        rc_channels[CH_YAW] = rc_yaw
-        # rc_channels[CH_AUX1] est déjà géré par l'armement/désarmement
-        rc_channels[CH_AUX2] = RC_MID # Pas de mode de vol actif sur AUX2 pour l'instant
-        rc_channels[CH_AUX3] = RC_MID
-        rc_channels[CH_AUX4] = RC_MID
+        if ser and ser.is_open:
+            print("Envoi des commandes de désarmement finales...")
+            for _ in range(5): # Envoyer plusieurs fois pour s'assurer de la réception
+                send_msp_packet(ser, MSP_SET_RAW_RC, payload_final)
+                time.sleep(0.02)
+            ser.close()
+            print("Port série fermé.")
         
-        # --- Envoi de la commande MSP ---
-        send_msp_command(MSP_SET_RAW_RC, rc_channels[:NUM_RC_CHANNELS])
+        pygame.quit()
+        print("Pygame quitté. Script terminé.")
 
-        # Affichage des valeurs (optionnel, pour le debug)
-        # print(f"Armed: {armed} | YawLock: {yaw_locked} | TestMode: {test_mode_active} | EStop: {emergency_stop_engaged}")
-        # print(f"R:{rc_roll} P:{rc_pitch} T:{rc_throttle} Y:{rc_yaw} A1:{rc_channels[CH_AUX1]}")
-
-        time.sleep(0.02) # Boucle à environ 50Hz
-
-except KeyboardInterrupt:
-    print("\nInterruption clavier, désarmement et fermeture...")
-except Exception as e:
-    print(f"\nUne erreur est survenue: {e}")
-finally:
-    # Action de sécurité à la fermeture : envoyer une commande de désarmement
-    print("Envoi de la commande de désarmement finale.")
-    final_rc_values = [RC_MID] * NUM_RC_CHANNELS
-    final_rc_values[CH_THROTTLE] = RC_MIN
-    final_rc_values[CH_AUX1] = AUX_DISARM_VALUE
-    if 'ser' in locals() and ser.is_open:
-        send_msp_command(MSP_SET_RAW_RC, final_rc_values[:NUM_RC_CHANNELS])
-        time.sleep(0.1) # Laisser le temps à la commande de passer
-        ser.close()
-        print("Port série fermé.")
-    pygame.quit()
-    print("Pygame quitté.")
-    print("Script terminé.")
+if __name__ == "__main__":
+    main()
