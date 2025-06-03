@@ -34,7 +34,7 @@ is_armed_command = False
 
 # --- NOUVEAU: Configuration Verrouillage Yaw ---
 yaw_locked = True # Yaw verrouillé par défaut au démarrage
-YAW_LOCK_VALUE = 1500 # Valeur du yaw lorsqu'il est verrouillé
+YAW_LOCK_VALUE = 1530 # Valeur du yaw lorsqu'il est verrouillé
 current_rc_values[3] = YAW_LOCK_VALUE # S'assurer que le yaw est à la valeur de verrouillage au démarrage
 
 # --- Configuration Manette ---
