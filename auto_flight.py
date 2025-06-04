@@ -8,7 +8,7 @@ import pygame
 # --- Configuration Globale ---
 ENABLE_THROTTLE_TEST_LIMIT = True # Mettre à False pour utiliser la pleine poussée (1000-2000)
 THROTTLE_TEST_MIN_VALUE = 1000
-THROTTLE_TEST_MAX_VALUE = 1600
+THROTTLE_TEST_MAX_VALUE = 1700
 
 # --- Configuration et Constantes MSP ---
 SERIAL_PORT = '/dev/ttyAMA0'
