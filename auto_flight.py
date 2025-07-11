@@ -11,7 +11,7 @@ THROTTLE_TEST_MIN_VALUE = 1000
 THROTTLE_TEST_MAX_VALUE = 1700
 
 # --- Configuration et Constantes MSP ---
-SERIAL_PORT = '/dev/ttyAMA0'
+SERIAL_PORT = None  # Déterminé dynamiquement
 BAUD_RATE = 115200
 MSP_SET_RAW_RC = 200
 MSP_ALTITUDE = 109
@@ -42,6 +42,8 @@ AXIS_YAW = 0        # Joystick Gauche X (pour Yaw)
 AXIS_THROTTLE = 1   # Joystick Gauche Y (pour Throttle)
 AXIS_ROLL = 3       # Joystick Droit X (pour Roll) - Souvent 2 ou 3 selon la manette
 AXIS_PITCH = 4      # Joystick Droit Y (pour Pitch) - Souvent 3 ou 4 selon la manette
+AXIS_L2 = 2         # Axe pour le bouton L2
+AXIS_R2 = 5         # Axe pour le bouton R2
 # Vérifiez ces axes avec `pygame.examples.joystick` si besoin
 
 BUTTON_ARM_DISARM = 4 # Souvent L1/LB
@@ -235,6 +237,23 @@ def handle_joystick_event(event):
                 current_rc_values[0] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_PITCH:
                 current_rc_values[1] = map_axis_to_rc(event.value, inverted=False)
+            elif event.axis == AXIS_L2:  # Axe L2 comme bouton
+                if event.value > -0.9:  # Axe appuyé (valeur proche de 1)
+                    current_rc_values[2] = 1450
+                else:  # Axe relâché (valeur proche de -1)
+                    pass # On ne modifie pas la poussée ici, elle est gérée plus bas
+            elif event.axis == AXIS_R2:  # Axe R2 comme bouton
+                if event.value > -0.9:  # Axe appuyé (valeur proche de 1)
+                    current_rc_values[2] = 1350
+                else:  # Axe relâché (valeur proche de -1)
+                    pass # On ne modifie pas la poussée ici, elle est gérée plus bas
+
+        # Gestion de la poussée par défaut si aucun bouton L2/R2 n'est appuyé
+        l2_pressed = joystick.get_axis(AXIS_L2) > -0.9 if joystick else False
+        r2_pressed = joystick.get_axis(AXIS_R2) > -0.9 if joystick else False
+
+        if not l2_pressed and not r2_pressed:
+            current_rc_values[2] = 1300
     
     # S'assurer que si le yaw est verrouillé, sa valeur est maintenue, même en mode manuel
     # Ceci est important si on sort d'un mode auto où le yaw aurait pu être modifié.
@@ -323,9 +342,32 @@ def print_status():
     print(status_line, end="\r")
     sys.stdout.flush()
 
+def test_serial_port(port):
+    try:
+        ser = serial.Serial(port, BAUD_RATE, timeout=1)
+        ser.write(b'\n')  # Envoyer un caractère pour tester
+        time.sleep(0.1)
+        if ser.in_waiting > 0:
+            ser.close()
+            return True
+        else:
+            ser.close()
+            return False
+    except serial.SerialException:
+        return False
+
+def find_serial_port():
+    ports = ['/dev/ttyAMA0', '/dev/ttyS0']
+    for port in ports:
+        if test_serial_port(port):
+            print(f"Port série fonctionnel trouvé: {port}")
+            return port
+    print("Aucun port série fonctionnel trouvé. Vérifiez la configuration.")
+    return None
+
 def main():
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
-    global last_msp_request_time, current_altitude_m
+    global last_msp_request_time, current_altitude_m, SERIAL_PORT
     global THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, HOVER_THROTTLE_ESTIMATE, THROTTLE_SAFETY_ARM, TAKEOFF_THROTTLE_CEILING
     global yaw_locked # NOUVEAU
 
@@ -353,6 +395,10 @@ def main():
         joystick = pygame.joystick.Joystick(0); joystick.init(); joystick_connected = True
         print(f"Manette '{joystick.get_name()}' connectée.")
     else: print("Aucune manette détectée.")
+
+    SERIAL_PORT = find_serial_port()
+    if not SERIAL_PORT:
+        pygame.quit(); return
 
     ser_buffer = b''
     try:
