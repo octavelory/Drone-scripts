@@ -25,7 +25,7 @@ THROTTLE_MAX_EFFECTIVE = THROTTLE_TEST_MAX_VALUE if ENABLE_THROTTLE_TEST_LIMIT e
 # NOUVEAU: Configuration des poussées L2/R2
 THRUST_L2_PRESSED = 1450
 THRUST_R2_PRESSED = 1350
-THRUST_TRIGGERS_RELEASED = 1300
+THRUST_TRIGGERS_RELEASED = 1100
 # Seuil d'activation pour les gâchettes (elles vont de -1.0 relâché à 1.0 appuyé)
 TRIGGER_ACTIVATION_THRESHOLD = 0.0 
 
@@ -43,7 +43,7 @@ is_armed_command = False
 
 # --- Configuration Verrouillage Yaw ---
 yaw_locked = True # Yaw verrouillé par défaut au démarrage
-YAW_LOCK_VALUE = 1530 # Valeur du yaw lorsqu'il est verrouillé
+YAW_LOCK_VALUE = 1500 # Valeur du yaw lorsqu'il est verrouillé
 current_rc_values[3] = YAW_LOCK_VALUE # S'assurer que le yaw est à la valeur de verrouillage au démarrage
 
 # --- Configuration Manette ---
