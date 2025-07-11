@@ -11,7 +11,8 @@ THROTTLE_TEST_MIN_VALUE = 1000
 THROTTLE_TEST_MAX_VALUE = 1700
 
 # --- Configuration et Constantes MSP ---
-SERIAL_PORT = '/dev/ttyAMA0'
+# MODIFIÉ: Le port série sera déterminé dynamiquement
+# SERIAL_PORT = '/dev/ttyAMA0' 
 BAUD_RATE = 115200
 MSP_SET_RAW_RC = 200
 MSP_ALTITUDE = 109
@@ -32,23 +33,27 @@ THROTTLE_SAFETY_ARM = THROTTLE_MIN_EFFECTIVE + 100
 # État du drone
 is_armed_command = False
 
-# --- NOUVEAU: Configuration Verrouillage Yaw ---
+# --- Configuration Verrouillage Yaw ---
 yaw_locked = True # Yaw verrouillé par défaut au démarrage
 YAW_LOCK_VALUE = 1530 # Valeur du yaw lorsqu'il est verrouillé
 current_rc_values[3] = YAW_LOCK_VALUE # S'assurer que le yaw est à la valeur de verrouillage au démarrage
 
 # --- Configuration Manette ---
 AXIS_YAW = 0        # Joystick Gauche X (pour Yaw)
-AXIS_THROTTLE = 1   # Joystick Gauche Y (pour Throttle)
+# MODIFIÉ: L'axe de poussée est maintenant géré par les gâchettes L2/R2
+# AXIS_THROTTLE = 1   # Joystick Gauche Y (pour Throttle)
 AXIS_ROLL = 3       # Joystick Droit X (pour Roll) - Souvent 2 ou 3 selon la manette
 AXIS_PITCH = 4      # Joystick Droit Y (pour Pitch) - Souvent 3 ou 4 selon la manette
-# Vérifiez ces axes avec `pygame.examples.joystick` si besoin
+
+# NOUVEAU: Définition des axes pour les gâchettes L2 et R2
+AXIS_L2 = 2         # Gâchette gauche, souvent l'axe 2
+AXIS_R2 = 5         # Gâchette droite, souvent l'axe 5
 
 BUTTON_ARM_DISARM = 4 # Souvent L1/LB
-BUTTON_QUIT = 5       # Souvent L2/LT (peut être un axe sur certaines manettes)
+BUTTON_QUIT = 5       # Souvent R1/RB (Vérifiez votre manette)
 BUTTON_AUTO_MODE = 2  # Souvent X ou Carré
 BUTTON_FLIP = 3       # Souvent Y ou Triangle
-BUTTON_TOGGLE_YAW_LOCK = 6 # NOUVEAU: Souvent R1/RB. Choisir un bouton disponible.
+BUTTON_TOGGLE_YAW_LOCK = 6 # Souvent "Start" ou un autre bouton disponible.
 
 JOYSTICK_DEADZONE = 0.08
 
@@ -179,13 +184,10 @@ def manage_auto_flight_modes():
 
     if current_flight_state not in [STATE_MANUAL, STATE_PERFORMING_FLIP]:
         current_rc_values[0] = 1500; current_rc_values[1] = 1500
-        if yaw_locked: # MODIFIÉ: Si yaw verrouillé, le maintenir à sa valeur de verrouillage
+        if yaw_locked:
             current_rc_values[3] = YAW_LOCK_VALUE
-        # Si le yaw n'est pas verrouillé, on pourrait vouloir le laisser contrôlable ou le mettre neutre.
-        # Pour les modes auto, il est généralement préférable de le mettre neutre.
         else:
             current_rc_values[3] = 1500
-
 
     if current_flight_state == STATE_AUTO_TAKEOFF:
         if current_altitude_m is None: return
@@ -221,23 +223,20 @@ def manage_auto_flight_modes():
 def handle_joystick_event(event):
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
     global flip_start_time, flip_phase, previous_flight_mode_rc_value
-    global yaw_locked # NOUVEAU
+    global yaw_locked
 
     if current_flight_state == STATE_MANUAL:
         if event.type == pygame.JOYAXISMOTION:
-            if event.axis == AXIS_THROTTLE:
-                current_rc_values[2] = map_axis_to_rc(event.value, min_rc=THROTTLE_MIN_EFFECTIVE, max_rc=THROTTLE_MAX_EFFECTIVE, inverted=True)
-            elif event.axis == AXIS_YAW:
-                if not yaw_locked: # MODIFIÉ: Contrôler le yaw seulement s'il n'est pas verrouillé
+            # MODIFIÉ: La gestion de la poussée (throttle) est retirée d'ici
+            # et sera gérée dans la boucle principale.
+            if event.axis == AXIS_YAW:
+                if not yaw_locked:
                     current_rc_values[3] = map_axis_to_rc(event.value)
-                # Si yaw_locked est True, current_rc_values[3] reste à YAW_LOCK_VALUE
             elif event.axis == AXIS_ROLL:
                 current_rc_values[0] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_PITCH:
                 current_rc_values[1] = map_axis_to_rc(event.value, inverted=False)
     
-    # S'assurer que si le yaw est verrouillé, sa valeur est maintenue, même en mode manuel
-    # Ceci est important si on sort d'un mode auto où le yaw aurait pu être modifié.
     if yaw_locked:
         current_rc_values[3] = YAW_LOCK_VALUE
 
@@ -254,15 +253,13 @@ def handle_joystick_event(event):
                 current_flight_state = STATE_MANUAL 
                 print("\nCOMMANDE: DESARMEMENT")
         
-        elif event.button == BUTTON_TOGGLE_YAW_LOCK: # NOUVEAU
+        elif event.button == BUTTON_TOGGLE_YAW_LOCK:
             yaw_locked = not yaw_locked
             if yaw_locked:
-                current_rc_values[3] = YAW_LOCK_VALUE # Forcer le yaw à la valeur de verrouillage
+                current_rc_values[3] = YAW_LOCK_VALUE
                 print("\nINFO: Yaw VERROUILLÉ")
             else:
                 print("\nINFO: Yaw DÉVERROUILLÉ")
-                # Optionnel: si on déverrouille, on pourrait vouloir que le yaw prenne la position actuelle du stick
-                # Mais cela sera géré par le prochain événement JOYAXISMOTION pour AXIS_YAW
 
         elif event.button == BUTTON_AUTO_MODE:
             if not is_armed_command: print("\nINFO: Armez d'abord pour le mode auto."); return None
@@ -310,10 +307,10 @@ def print_status():
     state_str = state_list[current_flight_state] if 0 <= current_flight_state < len(state_list) else "UNKNOWN"
     
     throttle_mode_str = "TEST" if ENABLE_THROTTLE_TEST_LIMIT else "FULL"
-    yaw_lock_str = "L" if yaw_locked else "U" # MODIFIÉ: L pour Locked, U pour Unlocked
+    yaw_lock_str = "L" if yaw_locked else "U"
 
     status_line = (
-        f"R:{current_rc_values[0]} P:{current_rc_values[1]} T:{current_rc_values[2]}({throttle_mode_str}) Y:{current_rc_values[3]}({yaw_lock_str}) | " # MODIFIÉ
+        f"R:{current_rc_values[0]} P:{current_rc_values[1]} T:{current_rc_values[2]}({throttle_mode_str}) Y:{current_rc_values[3]}({yaw_lock_str}) | "
         f"ARM:{current_rc_values[4]}({'Y' if is_armed_command else 'N'}) | ACRO:{current_rc_values[ACRO_MODE_CHANNEL_INDEX]} | "
         f"Alt:{alt_str} | St:{state_str}"
     )
@@ -327,7 +324,7 @@ def main():
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
     global last_msp_request_time, current_altitude_m
     global THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, HOVER_THROTTLE_ESTIMATE, THROTTLE_SAFETY_ARM, TAKEOFF_THROTTLE_CEILING
-    global yaw_locked # NOUVEAU
+    global yaw_locked
 
     THROTTLE_MIN_EFFECTIVE = THROTTLE_TEST_MIN_VALUE if ENABLE_THROTTLE_TEST_LIMIT else 1000
     THROTTLE_MAX_EFFECTIVE = THROTTLE_TEST_MAX_VALUE if ENABLE_THROTTLE_TEST_LIMIT else 2000
@@ -338,15 +335,29 @@ def main():
     else: HOVER_THROTTLE_ESTIMATE = 1500
     TAKEOFF_THROTTLE_CEILING = THROTTLE_MAX_EFFECTIVE + 50
     
-    # S'assurer que le yaw est initialisé à sa valeur verrouillée
     current_rc_values[3] = YAW_LOCK_VALUE 
-    yaw_locked = True # Redondant si déjà défini globalement, mais assure l'état initial
+    yaw_locked = True
 
     print("--- Script Contrôle Drone MSP (Manette + Auto Alt + Flip + Yaw Lock) ---")
     if ENABLE_THROTTLE_TEST_LIMIT: print(f"!!! MODE TEST THROTTLE ACTIF: {THROTTLE_MIN_EFFECTIVE}-{THROTTLE_MAX_EFFECTIVE} !!!")
     else: print("!!! MODE PLEINE POUSSÉE ACTIF: 1000-2000 !!!")
     print("!!! FLIP EST EXTRÊMEMENT DANGEREUX !!!")
     
+    # NOUVEAU: Logique de sélection automatique du port série
+    possible_ports = ['/dev/ttyAMA0', '/dev/ttyS0']
+    ser = None
+    for port in possible_ports:
+        try:
+            ser = serial.Serial(port, BAUD_RATE, timeout=0)
+            print(f"Port série {port} ouvert avec succès.")
+            break # Sortir de la boucle si la connexion réussit
+        except serial.SerialException:
+            print(f"Impossible d'ouvrir le port {port}. Essai du suivant...")
+    
+    if ser is None:
+        print("ERREUR: Aucun port série fonctionnel trouvé. Le script va s'arrêter.")
+        return
+
     pygame.init()
     pygame.joystick.init()
     if pygame.joystick.get_count() > 0:
@@ -355,12 +366,6 @@ def main():
     else: print("Aucune manette détectée.")
 
     ser_buffer = b''
-    try:
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0) 
-        print(f"Port série {SERIAL_PORT} ouvert.")
-    except serial.SerialException as e:
-        print(f"Erreur port série: {e}"); pygame.quit(); return
-
     running = True
     try:
         while running:
@@ -377,8 +382,6 @@ def main():
                 ser_buffer += ser.read(ser.in_waiting)
             ser_buffer = parse_msp_response(ser_buffer)
 
-            # MODIFIÉ: S'assurer que le yaw est à YAW_LOCK_VALUE si yaw_locked est True
-            # Ceci est une double sécurité, car handle_joystick_event devrait déjà le gérer.
             if yaw_locked:
                 current_rc_values[3] = YAW_LOCK_VALUE
 
@@ -390,15 +393,24 @@ def main():
                 current_rc_values[2] = THROTTLE_MIN_EFFECTIVE
 
             if joystick_connected:
-                if current_flight_state == STATE_MANUAL:
-                     current_rc_values[2] = max(THROTTLE_MIN_EFFECTIVE, min(THROTTLE_MAX_EFFECTIVE, current_rc_values[2]))
-                
-                for i in [0, 1, 4, 5, 6, 7]: # Tous sauf throttle et yaw (gérés spécifiquement)
-                    current_rc_values[i] = max(1000, min(2000, current_rc_values[i]))
-                # S'assurer que le yaw est aussi clampé s'il n'est pas verrouillé
-                if not yaw_locked:
-                    current_rc_values[3] = max(1000, min(2000, current_rc_values[3]))
+                # NOUVEAU: Logique de poussée via les gâchettes L2/R2
+                # Cette logique ne s'applique qu'en mode manuel et si le drone est armé
+                if is_armed_command and current_flight_state == STATE_MANUAL:
+                    # Les axes des gâchettes vont de -1 (relâché) à 1 (enfoncé)
+                    l2_val = joystick.get_axis(AXIS_L2)
+                    r2_val = joystick.get_axis(AXIS_R2)
 
+                    # On considère la gâchette comme "enfoncée" si sa valeur dépasse un seuil
+                    if l2_val > 0.5:
+                        current_rc_values[2] = 1450 # Poussée avec L2
+                    elif r2_val > 0.5:
+                        current_rc_values[2] = 1350 # Poussée avec R2
+                    else:
+                        current_rc_values[2] = 1300 # Poussée par défaut quand les deux sont relâchées
+                
+                # S'assurer que les valeurs restent dans les limites valides
+                for i in range(RC_CHANNELS_COUNT):
+                    current_rc_values[i] = max(1000, min(2000, current_rc_values[i]))
 
                 payload_rc = b''.join(struct.pack('<H', int(val)) for val in current_rc_values[:RC_CHANNELS_COUNT])
                 send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc)
@@ -408,7 +420,7 @@ def main():
                 if is_armed_command:
                     current_rc_values[2] = THROTTLE_MIN_EFFECTIVE; current_rc_values[4] = DISARM_VALUE
                     is_armed_command = False; current_flight_state = STATE_MANUAL
-                    current_rc_values[3] = YAW_LOCK_VALUE # Verrouiller le yaw si manette déconnectée
+                    current_rc_values[3] = YAW_LOCK_VALUE
                     yaw_locked = True
                     payload_rc = b''.join(struct.pack('<H', int(val)) for val in current_rc_values[:RC_CHANNELS_COUNT])
                     send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc)
@@ -420,9 +432,9 @@ def main():
         print("\nNettoyage et commandes de sécurité finales...")
         final_rc = [1500]*RC_CHANNELS_COUNT
         final_rc[2] = THROTTLE_MIN_EFFECTIVE; final_rc[4] = DISARM_VALUE
-        final_rc[3] = YAW_LOCK_VALUE # S'assurer que le yaw est neutre à la fin
+        final_rc[3] = YAW_LOCK_VALUE
         payload_final = b''.join(struct.pack('<H', int(v)) for v in final_rc)
-        if 'ser' in locals() and ser.is_open:
+        if 'ser' in locals() and ser and ser.is_open:
             for _ in range(5): send_msp_packet(ser, MSP_SET_RAW_RC, payload_final); time.sleep(0.02)
             ser.close(); print("Port série fermé.")
         pygame.quit(); print("Pygame quitté. Script terminé.")
