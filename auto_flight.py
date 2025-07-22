@@ -506,7 +506,7 @@ def main():
                      # Throttle est déjà géré par apply_trigger_throttle_logic() et ses limites
                      pass
                 
-                for i in [0, 1, 4, 5, 6, 7]: # Roll, Pitch, AUX1-4
+                for i in [0, 1, 5, 6, 7]: # Roll, Pitch, AUX2-4 (AUX1 pour armement est géré séparément)
                     current_rc_values[i] = max(1000, min(2000, current_rc_values[i]))
                 
                 if not yaw_locked: # Yaw
