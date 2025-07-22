@@ -23,8 +23,8 @@ THROTTLE_MIN_EFFECTIVE = THROTTLE_TEST_MIN_VALUE if ENABLE_THROTTLE_TEST_LIMIT e
 THROTTLE_MAX_EFFECTIVE = THROTTLE_TEST_MAX_VALUE if ENABLE_THROTTLE_TEST_LIMIT else 2000
 
 # NOUVEAU: Configuration des poussées L2/R2
-THRUST_L2_PRESSED = 1550
-THRUST_R2_PRESSED = 1450
+THRUST_L2_PRESSED = 1450
+THRUST_R2_PRESSED = 1350
 THRUST_TRIGGERS_RELEASED = 1000
 # Seuil d'activation pour les gâchettes (elles vont de -1.0 relâché à 1.0 appuyé)
 TRIGGER_ACTIVATION_THRESHOLD = 0.0 
@@ -450,21 +450,6 @@ def main():
     if ser is None:
         pygame.quit()
         sys.exit(1) # Quitter si aucun port série n'est trouvé
-
-    # <<< C'EST CET AJOUT QUI VA TOUT RÉSOUDRE >>>
-    # Forcer l'envoi de commandes "Désarmé" pendant une seconde pour que Betaflight soit prêt.
-    print("Initialisation de la liaison : envoi des commandes de désarmement...")
-    init_start_time = time.time()
-    while time.time() - init_start_time < 1.0: # Envoyer pendant 1 seconde
-        # Préparer un paquet RC de sécurité (désarmé, gaz à zéro)
-        init_rc_values = [1500] * RC_CHANNELS_COUNT
-        init_rc_values[2] = 1000 # Throttle au minimum absolu
-        init_rc_values[4] = DISARM_VALUE # AUX1 (Arm) à la valeur de désarmement (1000)
-        payload_rc_init = b''.join(struct.pack('<H', int(val)) for val in init_rc_values[:RC_CHANNELS_COUNT])
-        send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc_init)
-        time.sleep(0.05) # Envoyer à 20Hz
-    print("Initialisation terminée. Prêt à armer.")
-    # <<< FIN DE L'AJOUT >>>
 
     ser_buffer = b''
     running = True
