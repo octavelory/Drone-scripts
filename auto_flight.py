@@ -98,6 +98,11 @@ ACRO_MODE_VALUE = 2000
 STABLE_MODE_VALUE = 1000
 previous_flight_mode_rc_value = STABLE_MODE_VALUE
 
+# NOUVEAU: Configuration Althold
+ALTHOLD_CHANNEL_INDEX = 5 # Utilise AUX2, le même que ACRO_MODE_CHANNEL_INDEX
+ALTHOLD_MODE_VALUE = 1800
+is_althold_active = False
+
 # --- Variables globales pour la manette ---
 joystick = None
 joystick_connected = False
@@ -343,16 +348,19 @@ def handle_joystick_event(event):
                 print("\nINFO: Yaw DÉVERROUILLÉ")
 
         elif event.button == BUTTON_AUTO_MODE:
-            if not is_armed_command: print("\nINFO: Armez d'abord pour le mode auto."); return None
-            # Note: Le check THROTTLE_SAFETY_ARM peut empêcher le décollage auto si 1300 est trop haut pour le mode auto
-            if current_flight_state == STATE_MANUAL: # and current_rc_values[2] <= THROTTLE_SAFETY_ARM:
-                if current_altitude_m is not None and current_altitude_m < (TARGET_ALTITUDE_M / 2):
-                    current_flight_state = STATE_AUTO_TAKEOFF
-                else: print("\nINFO: Décollage auto non initié (altitude?).")
-            elif current_flight_state == STATE_AUTO_HOVER or current_flight_state == STATE_AUTO_TAKEOFF:
-                current_flight_state = STATE_AUTO_LANDING
-            elif current_flight_state == STATE_AUTO_LANDING:
-                current_flight_state = STATE_AUTO_HOVER
+            if not is_armed_command:
+                print("\nINFO: Armez d'abord pour activer le mode Althold.")
+                return None
+            
+            global is_althold_active
+            is_althold_active = not is_althold_active
+            
+            if is_althold_active:
+                current_rc_values[ALTHOLD_CHANNEL_INDEX] = ALTHOLD_MODE_VALUE
+                print("\nINFO: Mode Althold ACTIVÉ")
+            else:
+                current_rc_values[ALTHOLD_CHANNEL_INDEX] = STABLE_MODE_VALUE
+                print("\nINFO: Mode Althold DÉSACTIVÉ")
         
         elif event.button == BUTTON_FLIP:
             if is_armed_command and current_flight_state == STATE_MANUAL:
@@ -396,11 +404,12 @@ def print_status():
     # NOUVEAU: Affichage de l'état L2/R2
     l2_state = "P" if raw_axis_L2 > TRIGGER_ACTIVATION_THRESHOLD else "R"
     r2_state = "P" if raw_axis_R2 > TRIGGER_ACTIVATION_THRESHOLD else "R"
+    althold_str = "ON" if is_althold_active else "OFF"
 
     status_line = (
         f"R:{current_rc_values[0]} P:{current_rc_values[1]} T:{current_rc_values[2]}({throttle_mode_str}) Y:{current_rc_values[3]}({yaw_lock_str}) | "
         f"L2:{l2_state} R2:{r2_state} | " # NOUVEAU
-        f"ARM:{current_rc_values[4]}({'Y' if is_armed_command else 'N'}) | ACRO:{current_rc_values[ACRO_MODE_CHANNEL_INDEX]} | "
+        f"ARM:{current_rc_values[4]}({'Y' if is_armed_command else 'N'}) | ALTHOLD:{althold_str}({current_rc_values[ALTHOLD_CHANNEL_INDEX]}) | "
         f"Alt:{alt_str} | St:{state_str}"
     )
     if current_flight_state == STATE_PERFORMING_FLIP:
@@ -429,6 +438,7 @@ def main():
     TAKEOFF_THROTTLE_CEILING = THROTTLE_MAX_EFFECTIVE + 50
     
     current_rc_values[3] = YAW_LOCK_VALUE 
+    current_rc_values[ALTHOLD_CHANNEL_INDEX] = STABLE_MODE_VALUE # Initialiser le mode de vol
     yaw_locked = True
 
     print("--- Script Contrôle Drone MSP (Modifié L2/R2 Throttle + Auto Serial) ---")
