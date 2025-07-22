@@ -314,7 +314,7 @@ def handle_joystick_event(event):
             elif event.axis == AXIS_ROLL:
                 current_rc_values[0] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_PITCH:
-                current_rc_values[1] = map_axis_to_rc(event.value, inverted=True)
+                current_rc_values[1] = map_axis_to_rc(event.value, inverted=False)
     
     if yaw_locked:
         current_rc_values[3] = YAW_LOCK_VALUE
