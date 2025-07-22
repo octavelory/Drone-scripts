@@ -34,7 +34,7 @@ current_rc_values[2] = THRUST_TRIGGERS_RELEASED
 current_rc_values[4] = 1000  # AUX1 (Arm switch) désarmé
 
 ARM_VALUE = 1800
-DISARM_VALUE = 1000
+DISARM_VALUE = 1200  # Changé de 1000 à 1200
 # MODIFIÉ: La sécurité d'armement doit permettre d'armer avec la nouvelle valeur par défaut (1300)
 THROTTLE_SAFETY_ARM = THRUST_TRIGGERS_RELEASED + 50
 
@@ -327,17 +327,19 @@ def handle_joystick_event(event):
     if event.type == pygame.JOYBUTTONDOWN:
         if event.button == BUTTON_ARM_DISARM:
             if not is_armed_command:
-                # Vérifie si la poussée actuelle (par défaut 1300) est inférieure à la sécurité (1350)
+                # Vérifie si la poussée actuelle est inférieure à la sécurité
                 if current_rc_values[2] <= THROTTLE_SAFETY_ARM:
-                    current_rc_values[4] = ARM_VALUE; is_armed_command = True
-                    print("\nCOMMANDE: ARMEMENT")
-                else: print(f"\nSECURITE: Gaz ({current_rc_values[2]}) > {THROTTLE_SAFETY_ARM} pour armer.")
+                    current_rc_values[4] = ARM_VALUE
+                    is_armed_command = True
+                    print(f"\nCOMMANDE: ARMEMENT - AUX1:{ARM_VALUE}, Throttle:{current_rc_values[2]}")
+                else: 
+                    print(f"\nSECURITE: Gaz ({current_rc_values[2]}) > {THROTTLE_SAFETY_ARM} pour armer.")
             else: 
-                current_rc_values[4] = DISARM_VALUE; is_armed_command = False
-                # Lors du désarmement, on remet la poussée au minimum de sécurité (1300)
+                current_rc_values[4] = DISARM_VALUE
+                is_armed_command = False
                 current_rc_values[2] = THRUST_TRIGGERS_RELEASED
                 current_flight_state = STATE_MANUAL 
-                print("\nCOMMANDE: DESARMEMENT")
+                print(f"\nCOMMANDE: DESARMEMENT - AUX1:{DISARM_VALUE}")
         
         elif event.button == BUTTON_TOGGLE_YAW_LOCK:
             yaw_locked = not yaw_locked
@@ -388,7 +390,7 @@ def handle_joystick_event(event):
         print("\nManette déconnectée. Passage en mode manuel et désarmement.")
         current_flight_state = STATE_MANUAL
         current_rc_values[2] = THRUST_TRIGGERS_RELEASED # Remettre la poussée par défaut
-        current_rc_values[4] = DISARM_VALUE
+        current_rc_values[4] = DISARM_VALUE  # Utiliser la nouvelle valeur de désarmement
         is_armed_command = False
     return None
 
@@ -506,7 +508,7 @@ def main():
                      # Throttle est déjà géré par apply_trigger_throttle_logic() et ses limites
                      pass
                 
-                for i in [0, 1, 5, 6, 7]: # Roll, Pitch, AUX2-4 (AUX1 pour armement est géré séparément)
+                for i in [0, 1, 4, 5, 6, 7]: # Roll, Pitch, AUX1-4
                     current_rc_values[i] = max(1000, min(2000, current_rc_values[i]))
                 
                 if not yaw_locked: # Yaw
@@ -536,7 +538,7 @@ def main():
         final_rc = [1500]*RC_CHANNELS_COUNT
         # Utiliser la poussée minimale absolue (1000) pour la sécurité finale
         final_rc[2] = 1000 
-        final_rc[4] = DISARM_VALUE
+        final_rc[4] = DISARM_VALUE  # Utiliser la nouvelle valeur de désarmement
         final_rc[3] = YAW_LOCK_VALUE
         payload_final = b''.join(struct.pack('<H', int(v)) for v in final_rc)
         if 'ser' in locals() and ser is not None and ser.is_open:
