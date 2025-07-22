@@ -451,6 +451,21 @@ def main():
         pygame.quit()
         sys.exit(1) # Quitter si aucun port série n'est trouvé
 
+    # <<< C'EST CET AJOUT QUI VA TOUT RÉSOUDRE >>>
+    # Forcer l'envoi de commandes "Désarmé" pendant une seconde pour que Betaflight soit prêt.
+    print("Initialisation de la liaison : envoi des commandes de désarmement...")
+    init_start_time = time.time()
+    while time.time() - init_start_time < 1.0: # Envoyer pendant 1 seconde
+        # Préparer un paquet RC de sécurité (désarmé, gaz à zéro)
+        init_rc_values = [1500] * RC_CHANNELS_COUNT
+        init_rc_values[2] = 1000 # Throttle au minimum absolu
+        init_rc_values[4] = DISARM_VALUE # AUX1 (Arm) à la valeur de désarmement (1000)
+        payload_rc_init = b''.join(struct.pack('<H', int(val)) for val in init_rc_values[:RC_CHANNELS_COUNT])
+        send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc_init)
+        time.sleep(0.05) # Envoyer à 20Hz
+    print("Initialisation terminée. Prêt à armer.")
+    # <<< FIN DE L'AJOUT >>>
+
     ser_buffer = b''
     running = True
     try:
