@@ -22,21 +22,14 @@ current_rc_values = [1500] * RC_CHANNELS_COUNT
 THROTTLE_MIN_EFFECTIVE = THROTTLE_TEST_MIN_VALUE if ENABLE_THROTTLE_TEST_LIMIT else 1000
 THROTTLE_MAX_EFFECTIVE = THROTTLE_TEST_MAX_VALUE if ENABLE_THROTTLE_TEST_LIMIT else 2000
 
-# NOUVEAU: Configuration des poussées L2/R2
-THRUST_L2_PRESSED = 1550
-THRUST_R2_PRESSED = 1450
-THRUST_TRIGGERS_RELEASED = 1000
-# Seuil d'activation pour les gâchettes (elles vont de -1.0 relâché à 1.0 appuyé)
-TRIGGER_ACTIVATION_THRESHOLD = 0.0 
-
-# Initialisation du throttle à la valeur par défaut des gâchettes relâchées
-current_rc_values[2] = THRUST_TRIGGERS_RELEASED
+# Initialisation du throttle à la valeur minimale de sécurité
+current_rc_values[2] = THROTTLE_MIN_EFFECTIVE
 current_rc_values[4] = 1000  # AUX1 (Arm switch) désarmé
 
 ARM_VALUE = 1800
 DISARM_VALUE = 1000
-# MODIFIÉ: La sécurité d'armement doit permettre d'armer avec la nouvelle valeur par défaut (1300)
-THROTTLE_SAFETY_ARM = THRUST_TRIGGERS_RELEASED + 50
+# Sécurité d'armement basée sur la valeur minimale
+THROTTLE_SAFETY_ARM = THROTTLE_MIN_EFFECTIVE + 50
 
 # État du drone
 is_armed_command = False
@@ -48,11 +41,11 @@ current_rc_values[3] = YAW_LOCK_VALUE # S'assurer que le yaw est à la valeur de
 
 # --- Configuration Manette ---
 AXIS_YAW = 0        # Joystick Gauche X (pour Yaw)
-# AXIS_THROTTLE = 1   # Joystick Gauche Y (Non utilisé car L2/R2 gèrent la poussée)
-AXIS_L2 = 2         # NOUVEAU: Gâchette L2
+AXIS_THROTTLE = 1   # Joystick Gauche Y (pour Throttle)
+AXIS_L2 = 2         # Gâchette L2 (non utilisée pour le throttle maintenant)
 AXIS_ROLL = 3       # Joystick Droit X (pour Roll)
 AXIS_PITCH = 4      # Joystick Droit Y (pour Pitch)
-AXIS_R2 = 5         # NOUVEAU: Gâchette R2
+AXIS_R2 = 5         # Gâchette R2 (non utilisée pour le throttle maintenant)
 
 BUTTON_ARM_DISARM = 4 # Souvent L1/LB
 BUTTON_QUIT = 5       # Souvent R1/RB (Attention, R1 était BUTTON_TOGGLE_YAW_LOCK dans l'original)
@@ -101,9 +94,6 @@ previous_flight_mode_rc_value = STABLE_MODE_VALUE
 # --- Variables globales pour la manette ---
 joystick = None
 joystick_connected = False
-# NOUVEAU: Suivi de l'état brut des axes L2/R2 (initialisé à -1.0 = relâché)
-raw_axis_L2 = -1.0
-raw_axis_R2 = -1.0
 
 # --- Fonctions MSP (Inchangé) ---
 def calculate_checksum(payload):
@@ -174,44 +164,6 @@ def map_axis_to_rc(axis_value, min_rc=1000, max_rc=2000, inverted=False):
     if inverted: axis_value = -axis_value
     normalized_value = (axis_value + 1.0) / 2.0
     return int(min_rc + normalized_value * (max_rc - min_rc))
-
-# NOUVEAU: Initialisation des axes de la manette
-def initialize_joystick_axes(joy):
-    global raw_axis_L2, raw_axis_R2
-    try:
-        # Lire l'état initial des gâchettes
-        raw_axis_L2 = joy.get_axis(AXIS_L2)
-        raw_axis_R2 = joy.get_axis(AXIS_R2)
-    except IndexError:
-        print(f"Avertissement: La manette n'a pas les axes L2({AXIS_L2}) ou R2({AXIS_R2}). Défaut à -1.0.")
-        raw_axis_L2 = -1.0
-        raw_axis_R2 = -1.0
-
-# NOUVEAU: Logique de poussée L2/R2
-def apply_trigger_throttle_logic():
-    global current_rc_values, raw_axis_L2, raw_axis_R2
-    
-    # Appliquer cette logique seulement en mode manuel. Les modes auto gèrent leur propre poussée.
-    if current_flight_state != STATE_MANUAL:
-        return
-
-    # Vérifier si les gâchettes sont appuyées (valeur > seuil, défaut est -1)
-    is_L2_pressed = raw_axis_L2 > TRIGGER_ACTIVATION_THRESHOLD
-    is_R2_pressed = raw_axis_R2 > TRIGGER_ACTIVATION_THRESHOLD
-
-    # Déterminer la valeur de poussée
-    if is_L2_pressed:
-        # Si L2 est appuyé (prioritaire si les deux sont appuyés)
-        throttle_value = THRUST_L2_PRESSED
-    elif is_R2_pressed:
-        throttle_value = THRUST_R2_PRESSED
-    else:
-        # Les deux relâchés
-        throttle_value = THRUST_TRIGGERS_RELEASED
-    
-    # Appliquer la valeur au canal RC 2 (Throttle)
-    # S'assurer qu'elle respecte les limites globales définies par ENABLE_THROTTLE_TEST_LIMIT
-    current_rc_values[2] = int(max(THROTTLE_MIN_EFFECTIVE, min(THROTTLE_MAX_EFFECTIVE, throttle_value)))
 
 # --- Fonctions de Vol Automatique (Inchangées pour la plupart) ---
 def manage_flip_sequence():
@@ -291,31 +243,21 @@ def handle_joystick_event(event):
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
     global flip_start_time, flip_phase, previous_flight_mode_rc_value
     global yaw_locked
-    global raw_axis_L2, raw_axis_R2 # NOUVEAU
 
     if current_flight_state == STATE_MANUAL:
         if event.type == pygame.JOYAXISMOTION:
-            
-            # --- NOUVEAU: Gestion des axes L2/R2 ---
-            if event.axis == AXIS_L2:
-                raw_axis_L2 = event.value
-                # On ne met pas à jour RC ici, apply_trigger_throttle_logic() le fera dans la boucle principale
-                return None 
-            elif event.axis == AXIS_R2:
-                raw_axis_R2 = event.value
-                return None
-            # ---------------------------------------
-
-            # Note: AXIS_THROTTLE (Joystick Gauche Y) est ignoré car L2/R2 gèrent la poussée.
-
             if event.axis == AXIS_YAW:
                 if not yaw_locked:
                     current_rc_values[3] = map_axis_to_rc(event.value)
+            elif event.axis == AXIS_THROTTLE:
+                # Contrôle du throttle avec le joystick gauche Y (inversé pour que haut = plus de puissance)
+                current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
             elif event.axis == AXIS_ROLL:
                 current_rc_values[0] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_PITCH:
                 current_rc_values[1] = map_axis_to_rc(event.value, inverted=True)
     
+    # S'assurer que le yaw reste verrouillé si activé
     if yaw_locked:
         current_rc_values[3] = YAW_LOCK_VALUE
 
@@ -330,7 +272,7 @@ def handle_joystick_event(event):
             else: 
                 current_rc_values[4] = DISARM_VALUE; is_armed_command = False
                 # Lors du désarmement, on remet la poussée au minimum de sécurité (1300)
-                current_rc_values[2] = THRUST_TRIGGERS_RELEASED
+                current_rc_values[2] = THROTTLE_MIN_EFFECTIVE
                 current_flight_state = STATE_MANUAL 
                 print("\nCOMMANDE: DESARMEMENT")
         
@@ -372,14 +314,12 @@ def handle_joystick_event(event):
     elif event.type == pygame.JOYDEVICEADDED:
         if pygame.joystick.get_count() > 0:
             joystick = pygame.joystick.Joystick(0); joystick.init(); joystick_connected = True
-            initialize_joystick_axes(joystick) # NOUVEAU: Initialiser les axes L2/R2
             print(f"\nManette '{joystick.get_name()}' connectée.")
     elif event.type == pygame.JOYDEVICEREMOVED:
         joystick_connected = False; joystick = None
-        raw_axis_L2 = -1.0; raw_axis_R2 = -1.0 # Réinitialiser les gâchettes
         print("\nManette déconnectée. Passage en mode manuel et désarmement.")
         current_flight_state = STATE_MANUAL
-        current_rc_values[2] = THRUST_TRIGGERS_RELEASED # Remettre la poussée par défaut
+        current_rc_values[2] = THROTTLE_MIN_EFFECTIVE # Remettre la poussée par défaut
         current_rc_values[4] = DISARM_VALUE
         is_armed_command = False
     return None
@@ -393,13 +333,8 @@ def print_status():
     throttle_mode_str = "TEST" if ENABLE_THROTTLE_TEST_LIMIT else "FULL"
     yaw_lock_str = "L" if yaw_locked else "U"
 
-    # NOUVEAU: Affichage de l'état L2/R2
-    l2_state = "P" if raw_axis_L2 > TRIGGER_ACTIVATION_THRESHOLD else "R"
-    r2_state = "P" if raw_axis_R2 > TRIGGER_ACTIVATION_THRESHOLD else "R"
-
     status_line = (
         f"R:{current_rc_values[0]} P:{current_rc_values[1]} T:{current_rc_values[2]}({throttle_mode_str}) Y:{current_rc_values[3]}({yaw_lock_str}) | "
-        f"L2:{l2_state} R2:{r2_state} | " # NOUVEAU
         f"ARM:{current_rc_values[4]}({'Y' if is_armed_command else 'N'}) | ACRO:{current_rc_values[ACRO_MODE_CHANNEL_INDEX]} | "
         f"Alt:{alt_str} | St:{state_str}"
     )
@@ -419,9 +354,9 @@ def main():
     THROTTLE_MIN_EFFECTIVE = THROTTLE_TEST_MIN_VALUE if ENABLE_THROTTLE_TEST_LIMIT else 1000
     THROTTLE_MAX_EFFECTIVE = THROTTLE_TEST_MAX_VALUE if ENABLE_THROTTLE_TEST_LIMIT else 2000
     
-    # MODIFIÉ: Initialisation du throttle et de la sécurité basée sur la nouvelle logique L2/R2
-    current_rc_values[2] = THRUST_TRIGGERS_RELEASED
-    THROTTLE_SAFETY_ARM = THRUST_TRIGGERS_RELEASED + 50 
+    # Initialisation du throttle à la valeur minimale de sécurité
+    current_rc_values[2] = THROTTLE_MIN_EFFECTIVE
+    THROTTLE_SAFETY_ARM = THROTTLE_MIN_EFFECTIVE + 50 
 
     if ENABLE_THROTTLE_TEST_LIMIT:
         HOVER_THROTTLE_ESTIMATE = int(THROTTLE_TEST_MIN_VALUE + (THROTTLE_TEST_MAX_VALUE - THROTTLE_TEST_MIN_VALUE) * 0.75)
@@ -431,17 +366,16 @@ def main():
     current_rc_values[3] = YAW_LOCK_VALUE 
     yaw_locked = True
 
-    print("--- Script Contrôle Drone MSP (Modifié L2/R2 Throttle + Auto Serial) ---")
+    print("--- Script Contrôle Drone MSP (Contrôle Joystick Gauche) ---")
     if ENABLE_THROTTLE_TEST_LIMIT: print(f"!!! MODE TEST THROTTLE ACTIF: {THROTTLE_MIN_EFFECTIVE}-{THROTTLE_MAX_EFFECTIVE} !!!")
     else: print("!!! MODE PLEINE POUSSÉE ACTIF: 1000-2000 !!!")
-    print(f"Poussée par défaut (L2/R2 relâchés): {THRUST_TRIGGERS_RELEASED}. Sécurité armement: <={THROTTLE_SAFETY_ARM}")
+    print(f"Contrôle: Joystick Gauche Y=Throttle, X=Yaw (verrouillé par défaut). Sécurité armement: <={THROTTLE_SAFETY_ARM}")
     
     # --- Initialisation Pygame et Manette ---
     pygame.init()
     pygame.joystick.init()
     if pygame.joystick.get_count() > 0:
         joystick = pygame.joystick.Joystick(0); joystick.init(); joystick_connected = True
-        initialize_joystick_axes(joystick) # NOUVEAU: Lire l'état initial des gâchettes
         print(f"Manette '{joystick.get_name()}' connectée.")
     else: print("Aucune manette détectée.")
 
@@ -472,10 +406,6 @@ def main():
 
             # 3. Application de la logique de contrôle
             if joystick_connected:
-                
-                # NOUVEAU: Appliquer la logique de poussée L2/R2 (seulement en mode manuel)
-                apply_trigger_throttle_logic()
-
                 # Gestion des modes de vol automatiques
                 if is_armed_command and current_flight_state != STATE_MANUAL:
                     manage_auto_flight_modes()
@@ -487,7 +417,7 @@ def main():
             # Gestion du désarmement inattendu pendant un mode auto
             if not is_armed_command and current_flight_state != STATE_MANUAL :
                 current_flight_state = STATE_MANUAL
-                current_rc_values[2] = THRUST_TRIGGERS_RELEASED # Retour à la poussée par défaut
+                current_rc_values[2] = THROTTLE_MIN_EFFECTIVE # Retour à la poussée par défaut
 
             # 4. Envoi des commandes RC et affichage
             if joystick_connected:
@@ -506,11 +436,11 @@ def main():
                 payload_rc = b''.join(struct.pack('<H', int(val)) for val in current_rc_values[:RC_CHANNELS_COUNT])
                 send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc)
                 print_status()
-            else: 
+            else:
                 # Logique si la manette est déconnectée
                 sys.stdout.write("\033[K"); print("Manette déconnectée...", end="\r"); sys.stdout.flush()
                 if is_armed_command:
-                    current_rc_values[2] = THRUST_TRIGGERS_RELEASED; current_rc_values[4] = DISARM_VALUE
+                    current_rc_values[2] = THROTTLE_MIN_EFFECTIVE; current_rc_values[4] = DISARM_VALUE
                     is_armed_command = False; current_flight_state = STATE_MANUAL
                     current_rc_values[3] = YAW_LOCK_VALUE
                     yaw_locked = True
