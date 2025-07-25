@@ -50,7 +50,7 @@ AXIS_R2 = 5         # Gâchette R2 (non utilisée pour le throttle maintenant)
 BUTTON_ARM_DISARM = 4 # Souvent L1/LB
 BUTTON_QUIT = 5       # Souvent R1/RB (Attention, R1 était BUTTON_TOGGLE_YAW_LOCK dans l'original)
 BUTTON_AUTO_MODE = 2  # Souvent X ou Carré
-BUTTON_FLIP = 3       # Souvent Y ou Triangle
+BUTTON_ALTHOLD = 3    # Souvent Y ou Triangle (ex-BUTTON_FLIP)
 BUTTON_TOGGLE_YAW_LOCK = 6 # Souvent Bouton Select/Back
 
 JOYSTICK_DEADZONE = 0.08
@@ -94,6 +94,7 @@ previous_flight_mode_rc_value = STABLE_MODE_VALUE
 # --- Variables globales pour la manette ---
 joystick = None
 joystick_connected = False
+althold_active = False  # NOUVEAU: État du mode ALTHOLD
 
 # --- Fonctions MSP (Inchangé) ---
 def calculate_checksum(payload):
@@ -242,7 +243,7 @@ def manage_auto_flight_modes():
 def handle_joystick_event(event):
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
     global flip_start_time, flip_phase, previous_flight_mode_rc_value
-    global yaw_locked
+    global yaw_locked, althold_active
 
     if current_flight_state == STATE_MANUAL:
         if event.type == pygame.JOYAXISMOTION:
@@ -274,6 +275,9 @@ def handle_joystick_event(event):
                 # Lors du désarmement, on remet la poussée au minimum de sécurité (1300)
                 current_rc_values[2] = THROTTLE_MIN_EFFECTIVE
                 current_flight_state = STATE_MANUAL 
+                # Désactiver ALTHOLD lors du désarmement
+                althold_active = False
+                current_rc_values[6] = 1000  # AUX2 à 1000
                 print("\nCOMMANDE: DESARMEMENT")
         
         elif event.button == BUTTON_TOGGLE_YAW_LOCK:
@@ -286,8 +290,7 @@ def handle_joystick_event(event):
 
         elif event.button == BUTTON_AUTO_MODE:
             if not is_armed_command: print("\nINFO: Armez d'abord pour le mode auto."); return None
-            # Note: Le check THROTTLE_SAFETY_ARM peut empêcher le décollage auto si 1300 est trop haut pour le mode auto
-            if current_flight_state == STATE_MANUAL: # and current_rc_values[2] <= THROTTLE_SAFETY_ARM:
+            if current_flight_state == STATE_MANUAL:
                 if current_altitude_m is not None and current_altitude_m < (TARGET_ALTITUDE_M / 2):
                     current_flight_state = STATE_AUTO_TAKEOFF
                 else: print("\nINFO: Décollage auto non initié (altitude?).")
@@ -296,32 +299,28 @@ def handle_joystick_event(event):
             elif current_flight_state == STATE_AUTO_LANDING:
                 current_flight_state = STATE_AUTO_HOVER
         
-        elif event.button == BUTTON_FLIP:
-            if is_armed_command and current_flight_state == STATE_MANUAL:
-                if current_altitude_m is not None and current_altitude_m > 1.5 :
-                    print("!!! TENTATIVE DE FLIP !!!")
-                    previous_flight_mode_rc_value = current_rc_values[ACRO_MODE_CHANNEL_INDEX]
-                    current_rc_values[ACRO_MODE_CHANNEL_INDEX] = ACRO_MODE_VALUE
-                    current_flight_state = STATE_PERFORMING_FLIP
-                    flip_start_time = time.time(); flip_phase = 1
-                    print("Flip: Phase Punch Gaz")
-                else: print("Flip: Altitude trop basse ou non lue.")
-            elif not is_armed_command: print("Flip: Drone non armé.")
-            else: print(f"Flip: Non autorisé dans l'état {current_flight_state}.")
+        elif event.button == BUTTON_ALTHOLD:
+            # Activer ALTHOLD mode (AUX2 à 1800)
+            althold_active = True
+            current_rc_values[6] = 1800  # AUX2 (index 6 = canal 7)
+            print("\nINFO: Mode ALTHOLD ACTIVÉ")
         
         elif event.button == BUTTON_QUIT: return "quit"
+
+    elif event.type == pygame.JOYBUTTONUP:
+        if event.button == BUTTON_ALTHOLD:
+            # Désactiver ALTHOLD mode (AUX2 à 1000)
+            althold_active = False
+            current_rc_values[6] = 1000  # AUX2 à 1000
+            print("\nINFO: Mode ALTHOLD DÉSACTIVÉ")
 
     elif event.type == pygame.JOYDEVICEADDED:
         if pygame.joystick.get_count() > 0:
             joystick = pygame.joystick.Joystick(0); joystick.init(); joystick_connected = True
             print(f"\nManette '{joystick.get_name()}' connectée.")
     elif event.type == pygame.JOYDEVICEREMOVED:
-        joystick_connected = False; joystick = None
-        print("\nManette déconnectée. Passage en mode manuel et désarmement.")
-        current_flight_state = STATE_MANUAL
-        current_rc_values[2] = THROTTLE_MIN_EFFECTIVE # Remettre la poussée par défaut
-        current_rc_values[4] = DISARM_VALUE
-        is_armed_command = False
+        print("\nMANETTE DÉCONNECTÉE - ARRÊT DU SCRIPT POUR SÉCURITÉ")
+        return "quit"  # Terminer le script immédiatement
     return None
 
 def print_status():
@@ -332,10 +331,12 @@ def print_status():
     
     throttle_mode_str = "TEST" if ENABLE_THROTTLE_TEST_LIMIT else "FULL"
     yaw_lock_str = "L" if yaw_locked else "U"
+    althold_str = "ON" if althold_active else "OFF"
 
     status_line = (
         f"R:{current_rc_values[0]} P:{current_rc_values[1]} T:{current_rc_values[2]}({throttle_mode_str}) Y:{current_rc_values[3]}({yaw_lock_str}) | "
         f"ARM:{current_rc_values[4]}({'Y' if is_armed_command else 'N'}) | ACRO:{current_rc_values[ACRO_MODE_CHANNEL_INDEX]} | "
+        f"ALTHOLD:{current_rc_values[6]}({althold_str}) | "
         f"Alt:{alt_str} | St:{state_str}"
     )
     if current_flight_state == STATE_PERFORMING_FLIP:
@@ -348,7 +349,7 @@ def main():
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
     global last_msp_request_time, current_altitude_m
     global THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, HOVER_THROTTLE_ESTIMATE, THROTTLE_SAFETY_ARM, TAKEOFF_THROTTLE_CEILING
-    global yaw_locked
+    global yaw_locked, althold_active
 
     # --- Initialisation des valeurs dynamiques ---
     THROTTLE_MIN_EFFECTIVE = THROTTLE_TEST_MIN_VALUE if ENABLE_THROTTLE_TEST_LIMIT else 1000
@@ -364,12 +365,16 @@ def main():
     TAKEOFF_THROTTLE_CEILING = THROTTLE_MAX_EFFECTIVE + 50
     
     current_rc_values[3] = YAW_LOCK_VALUE 
+    current_rc_values[6] = 1000  # AUX2 initialisé à 1000
     yaw_locked = True
+    althold_active = False
 
     print("--- Script Contrôle Drone MSP (Contrôle Joystick Gauche) ---")
     if ENABLE_THROTTLE_TEST_LIMIT: print(f"!!! MODE TEST THROTTLE ACTIF: {THROTTLE_MIN_EFFECTIVE}-{THROTTLE_MAX_EFFECTIVE} !!!")
     else: print("!!! MODE PLEINE POUSSÉE ACTIF: 1000-2000 !!!")
     print(f"Contrôle: Joystick Gauche Y=Throttle, X=Yaw (verrouillé par défaut). Sécurité armement: <={THROTTLE_SAFETY_ARM}")
+    print("IMPORTANT: Le script se terminera automatiquement si la manette se déconnecte!")
+    print("Bouton Y: Mode ALTHOLD (maintenir appuyé = AUX2 à 1800, relâcher = AUX2 à 1000)")
     
     # --- Initialisation Pygame et Manette ---
     pygame.init()
@@ -377,7 +382,10 @@ def main():
     if pygame.joystick.get_count() > 0:
         joystick = pygame.joystick.Joystick(0); joystick.init(); joystick_connected = True
         print(f"Manette '{joystick.get_name()}' connectée.")
-    else: print("Aucune manette détectée.")
+    else: 
+        print("ERREUR: Aucune manette détectée. Le script nécessite une manette pour fonctionner.")
+        pygame.quit()
+        sys.exit(1)
 
     # --- NOUVEAU: Initialisation Port Série ---
     ser = initialize_serial()
@@ -422,10 +430,6 @@ def main():
             # 4. Envoi des commandes RC et affichage
             if joystick_connected:
                 # Clamping des valeurs RC
-                if current_flight_state == STATE_MANUAL:
-                     # Throttle est déjà géré par apply_trigger_throttle_logic() et ses limites
-                     pass
-                
                 for i in [0, 1, 4, 5, 6, 7]: # Roll, Pitch, AUX1-4
                     current_rc_values[i] = max(1000, min(2000, current_rc_values[i]))
                 
@@ -437,15 +441,9 @@ def main():
                 send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc)
                 print_status()
             else:
-                # Logique si la manette est déconnectée
-                sys.stdout.write("\033[K"); print("Manette déconnectée...", end="\r"); sys.stdout.flush()
-                if is_armed_command:
-                    current_rc_values[2] = THROTTLE_MIN_EFFECTIVE; current_rc_values[4] = DISARM_VALUE
-                    is_armed_command = False; current_flight_state = STATE_MANUAL
-                    current_rc_values[3] = YAW_LOCK_VALUE
-                    yaw_locked = True
-                    payload_rc = b''.join(struct.pack('<H', int(val)) for val in current_rc_values[:RC_CHANNELS_COUNT])
-                    send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc)
+                # Si on arrive ici, c'est que la manette était connectée mais ne l'est plus
+                print("\nMANETTE DÉCONNECTÉE - ARRÊT IMMÉDIAT DU SCRIPT")
+                running = False
             
             time.sleep(0.02) # Boucle à ~50Hz
 
