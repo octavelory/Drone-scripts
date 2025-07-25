@@ -250,9 +250,6 @@ def handle_joystick_event(event):
             if event.axis == AXIS_YAW:
                 if not yaw_locked:
                     current_rc_values[3] = map_axis_to_rc(event.value)
-                # Si le yaw est verrouillé, on garde la valeur de verrouillage
-                elif yaw_locked:
-                    current_rc_values[3] = YAW_LOCK_VALUE
             elif event.axis == AXIS_THROTTLE:
                 # Contrôle du throttle avec le joystick gauche Y (inversé pour que haut = plus de puissance)
                 current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
@@ -261,6 +258,10 @@ def handle_joystick_event(event):
             elif event.axis == AXIS_PITCH:
                 current_rc_values[1] = map_axis_to_rc(event.value, inverted=True)
     
+    # S'assurer que le yaw reste verrouillé si activé
+    if yaw_locked:
+        current_rc_values[3] = YAW_LOCK_VALUE
+
     if event.type == pygame.JOYBUTTONDOWN:
         if event.button == BUTTON_ARM_DISARM:
             if not is_armed_command:
@@ -418,8 +419,8 @@ def main():
                     manage_auto_flight_modes()
 
             # Sécurité Yaw Lock
-            if yaw_locked:
-                current_rc_values[3] = YAW_LOCK_VALUE
+            # if yaw_locked:
+            #     current_rc_values[3] = YAW_LOCK_VALUE
 
             # Gestion du désarmement inattendu pendant un mode auto
             if not is_armed_command and current_flight_state != STATE_MANUAL :
