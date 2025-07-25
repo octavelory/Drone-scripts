@@ -35,7 +35,7 @@ THROTTLE_SAFETY_ARM = THROTTLE_MIN_EFFECTIVE + 50
 is_armed_command = False
 
 # --- Configuration Verrouillage Yaw ---
-yaw_locked = True # Yaw verrouillé par défaut au démarrage
+yaw_locked = False # Yaw verrouillé par défaut au démarrage
 YAW_LOCK_VALUE = 1500 # Valeur du yaw lorsqu'il est verrouillé
 current_rc_values[3] = YAW_LOCK_VALUE # S'assurer que le yaw est à la valeur de verrouillage au démarrage
 
@@ -250,6 +250,9 @@ def handle_joystick_event(event):
             if event.axis == AXIS_YAW:
                 if not yaw_locked:
                     current_rc_values[3] = map_axis_to_rc(event.value)
+                # Si le yaw est verrouillé, on garde la valeur de verrouillage
+                elif yaw_locked:
+                    current_rc_values[3] = YAW_LOCK_VALUE
             elif event.axis == AXIS_THROTTLE:
                 # Contrôle du throttle avec le joystick gauche Y (inversé pour que haut = plus de puissance)
                 current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
@@ -258,10 +261,6 @@ def handle_joystick_event(event):
             elif event.axis == AXIS_PITCH:
                 current_rc_values[1] = map_axis_to_rc(event.value, inverted=True)
     
-    # S'assurer que le yaw reste verrouillé si activé
-    if yaw_locked:
-        current_rc_values[3] = YAW_LOCK_VALUE
-
     if event.type == pygame.JOYBUTTONDOWN:
         if event.button == BUTTON_ARM_DISARM:
             if not is_armed_command:
