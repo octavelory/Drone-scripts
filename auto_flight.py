@@ -6,7 +6,7 @@ import os
 import pygame
 
 # --- Configuration Globale ---
-ENABLE_THROTTLE_TEST_LIMIT = True # Mettre à False pour utiliser la pleine poussée (1000-2000)
+ENABLE_THROTTLE_TEST_LIMIT = False # Mettre à False pour utiliser la pleine poussée (1000-2000)
 THROTTLE_TEST_MIN_VALUE = 1000
 THROTTLE_TEST_MAX_VALUE = 1700
 
@@ -56,7 +56,7 @@ BUTTON_TOGGLE_YAW_LOCK = 6 # Souvent Bouton Select/Back
 JOYSTICK_DEADZONE = 0.08
 
 # --- Configuration Vol Automatique (Inchangé) ---
-TARGET_ALTITUDE_M = 2.0
+TARGET_ALTITUDE_M = 1.0
 LANDING_ALTITUDE_THRESHOLD_M = 0.20
 TAKEOFF_END_ALTITUDE_ERROR_M = 0.25
 
