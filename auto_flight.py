@@ -277,7 +277,7 @@ def handle_joystick_event(event):
                 current_flight_state = STATE_MANUAL 
                 # Désactiver ALTHOLD lors du désarmement
                 althold_active = False
-                current_rc_values[6] = 1000  # AUX2 à 1000
+                current_rc_values[5] = 1000  # AUX2 à 1000 (index 5 = canal 6 = AUX2)
                 print("\nCOMMANDE: DESARMEMENT")
         
         elif event.button == BUTTON_TOGGLE_YAW_LOCK:
@@ -302,7 +302,7 @@ def handle_joystick_event(event):
         elif event.button == BUTTON_ALTHOLD:
             # Activer ALTHOLD mode (AUX2 à 1800)
             althold_active = True
-            current_rc_values[6] = 1800  # AUX2 (index 6 = canal 7)
+            current_rc_values[5] = 1800  # AUX2 (index 5 = canal 6 = AUX2)
             print("\nINFO: Mode ALTHOLD ACTIVÉ")
         
         elif event.button == BUTTON_QUIT: return "quit"
@@ -311,7 +311,7 @@ def handle_joystick_event(event):
         if event.button == BUTTON_ALTHOLD:
             # Désactiver ALTHOLD mode (AUX2 à 1000)
             althold_active = False
-            current_rc_values[6] = 1000  # AUX2 à 1000
+            current_rc_values[5] = 1000  # AUX2 à 1000 (index 5 = canal 6 = AUX2)
             print("\nINFO: Mode ALTHOLD DÉSACTIVÉ")
 
     elif event.type == pygame.JOYDEVICEADDED:
@@ -336,7 +336,7 @@ def print_status():
     status_line = (
         f"R:{current_rc_values[0]} P:{current_rc_values[1]} T:{current_rc_values[2]}({throttle_mode_str}) Y:{current_rc_values[3]}({yaw_lock_str}) | "
         f"ARM:{current_rc_values[4]}({'Y' if is_armed_command else 'N'}) | ACRO:{current_rc_values[ACRO_MODE_CHANNEL_INDEX]} | "
-        f"ALTHOLD:{current_rc_values[6]}({althold_str}) | "
+        f"ALTHOLD:{current_rc_values[5]}({althold_str}) | "
         f"Alt:{alt_str} | St:{state_str}"
     )
     if current_flight_state == STATE_PERFORMING_FLIP:
@@ -365,7 +365,7 @@ def main():
     TAKEOFF_THROTTLE_CEILING = THROTTLE_MAX_EFFECTIVE + 50
     
     current_rc_values[3] = YAW_LOCK_VALUE 
-    current_rc_values[6] = 1000  # AUX2 initialisé à 1000
+    current_rc_values[5] = 1000  # AUX2 initialisé à 1000 (index 5 = canal 6 = AUX2)
     yaw_locked = True
     althold_active = False
 
