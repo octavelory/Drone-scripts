@@ -92,10 +92,9 @@ AXIS_ROLL = 3       # Joystick Droit X (pour Roll)
 AXIS_PITCH = 4      # Joystick Droit Y (pour Pitch)
 AXIS_R2 = 5         # Gâchette R2 (non utilisée pour le throttle maintenant)
 
-BUTTON_ARM_DISARM = 4 # Souvent L1/LB
-BUTTON_QUIT = 5       # Souvent R1/RB
-BUTTON_AUTO_MODE = 2  # Souvent X ou Carré
-BUTTON_ALTHOLD = 3    # Souvent Y ou Triangle (ex-BUTTON_FLIP)
+BUTTON_ARM_DISARM = 4 # L1/LB - Seul bouton utilisé
+BUTTON_ALTHOLD = 3    # Y/Triangle - Mode ALTHOLD (maintenir)
+# BUTTON_QUIT et BUTTON_AUTO_MODE supprimés - boutons 2 et 5 inutilisés
 
 JOYSTICK_DEADZONE = 0.08
 
@@ -301,18 +300,17 @@ def print_banner():
 ║                           🚁 CONTRÔLE DRONE MSP 🚁                            ║
 ╚════════════════════════════════════════════════════════════════════════════════╝{Colors.RESET}
 
-{Colors.YELLOW}Mode Throttle: {Colors.GREEN if not ENABLE_THROTTLE_TEST_LIMIT else Colors.RED}{"COMPLET (1000-2000)" if not ENABLE_THROTTLE_TEST_LIMIT else f"TEST ({THROTTLE_MIN_EFFECTIVE}-{THROTTLE_MAX_EFFECTIVE})"}{Colors.RESET}
+{Colors.YELLOW}Mode Throttle: {Colors.GREEN if not ENABLE_THROTTLE_TEST_LIMIT else Colors.RED}{"COMPLET (1000-2000)" if not ENABLE_THROTTLE_TEST_LIMIT else f"TEST ({THROTTLE_MIN_EFFECTIVE}-{THROTTLE_TEST_MAX_VALUE})"}{Colors.RESET}
 {Colors.YELLOW}Sécurité Armement: {Colors.CYAN}≤ {THROTTLE_SAFETY_ARM}{Colors.RESET}
 
 {Colors.BOLD}CONTRÔLES:{Colors.RESET}
 {Colors.GREEN}├─ Joystick Gauche:{Colors.RESET} Y=Throttle, X=Yaw (verrouillé par défaut)
 {Colors.GREEN}├─ Joystick Droit:{Colors.RESET} X=Roll, Y=Pitch  
-{Colors.GREEN}├─ L1/LB:{Colors.RESET} Armer/Désarmer
-{Colors.GREEN}├─ X/Carré:{Colors.RESET} Mode Auto (Décollage/Atterrissage)
-{Colors.GREEN}├─ Y/Triangle:{Colors.RESET} Mode ALTHOLD (maintenir)
-{Colors.GREEN}└─ R1/RB:{Colors.RESET} Quitter
+{Colors.GREEN}├─ L1/LB:{Colors.RESET} Armer/Désarmer (BOUTON PRINCIPAL)
+{Colors.GREEN}└─ Y/Triangle:{Colors.RESET} Mode ALTHOLD (maintenir)
 
 {Colors.RED}{Colors.BOLD}⚠️  ATTENTION: Déconnexion manette = Arrêt automatique du script{Colors.RESET}
+{Colors.YELLOW}{Colors.BOLD}ℹ️  Pour quitter: Ctrl+C{Colors.RESET}
 """
     print(banner)
 
@@ -428,6 +426,9 @@ def handle_joystick_event(event):
             if not is_armed_command:
                 if current_rc_values[2] <= THROTTLE_SAFETY_ARM:
                     current_rc_values[4] = ARM_VALUE; is_armed_command = True
+                    # Message de confirmation
+                    move_cursor(35, 1)
+                    print(f"{Colors.GREEN}{Colors.BOLD}✅ DRONE ARMÉ{Colors.RESET}")
                 else: 
                     # Message d'erreur temporaire
                     move_cursor(35, 1)
@@ -438,30 +439,22 @@ def handle_joystick_event(event):
                 current_flight_state = STATE_MANUAL 
                 althold_active = False
                 current_rc_values[5] = 1000
-
-        elif event.button == BUTTON_AUTO_MODE:
-            if not is_armed_command: 
+                # Message de confirmation
                 move_cursor(35, 1)
-                print(f"{Colors.YELLOW}{Colors.BOLD}ℹ️  Armez d'abord le drone pour utiliser le mode auto{Colors.RESET}")
-                return None
-            if current_flight_state == STATE_MANUAL:
-                if current_altitude_m is not None and current_altitude_m < (TARGET_ALTITUDE_M / 2):
-                    current_flight_state = STATE_AUTO_TAKEOFF
-            elif current_flight_state == STATE_AUTO_HOVER or current_flight_state == STATE_AUTO_TAKEOFF:
-                current_flight_state = STATE_AUTO_LANDING
-            elif current_flight_state == STATE_AUTO_LANDING:
-                current_flight_state = STATE_AUTO_HOVER
+                print(f"{Colors.RED}{Colors.BOLD}🛑 DRONE DÉSARMÉ{Colors.RESET}")
         
         elif event.button == BUTTON_ALTHOLD:
             althold_active = True
             current_rc_values[5] = 1800
-        
-        elif event.button == BUTTON_QUIT: return "quit"
+            move_cursor(35, 1)
+            print(f"{Colors.GREEN}{Colors.BOLD}🔒 MODE ALTHOLD ACTIVÉ{Colors.RESET}")
 
     elif event.type == pygame.JOYBUTTONUP:
         if event.button == BUTTON_ALTHOLD:
             althold_active = False
             current_rc_values[5] = 1000
+            move_cursor(35, 1)
+            print(f"{Colors.YELLOW}{Colors.BOLD}🔓 MODE ALTHOLD DÉSACTIVÉ{Colors.RESET}")
 
     elif event.type == pygame.JOYDEVICEADDED:
         if pygame.joystick.get_count() > 0:
@@ -498,13 +491,14 @@ def main():
     current_rc_values[5] = 1000  # AUX2 initialisé à 1000 (index 5 = canal 6 = AUX2)
     althold_active = False
 
-    print("--- Script Contrôle Drone MSP (Contrôle Joystick Gauche) ---")
+    print("--- Script Contrôle Drone MSP (Contrôle Simplifié) ---")
     if ENABLE_THROTTLE_TEST_LIMIT: print(f"!!! MODE TEST THROTTLE ACTIF: {THROTTLE_MIN_EFFECTIVE}-{THROTTLE_MAX_EFFECTIVE} !!!")
     else: print("!!! MODE PLEINE POUSSÉE ACTIF: 1000-2000 !!!")
     print(f"Contrôle: Joystick Gauche Y=Throttle, X=Yaw (verrouillé par défaut). Sécurité armement: <={THROTTLE_SAFETY_ARM}")
     print("IMPORTANT: Le script se terminera automatiquement si la manette se déconnecte!")
-    print("Bouton Y: Mode ALTHOLD (maintenir appuyé = AUX2 à 1800, relâcher = AUX2 à 1000)")
-    
+    print("Bouton L1: Armer/Désarmer | Bouton Y: Mode ALTHOLD (maintenir)")
+    print("Pour quitter: Ctrl+C")
+
     # --- Initialisation Pygame et Manette ---
     pygame.init()
     pygame.joystick.init()
@@ -515,6 +509,10 @@ def main():
         print("ERREUR: Aucune manette détectée. Le script nécessite une manette pour fonctionner.")
         pygame.quit()
         sys.exit(1)
+
+    # Afficher la bannière après l'initialisation
+    print_banner()
+    hide_cursor()
 
     # --- NOUVEAU: Initialisation Port Série ---
     ser = initialize_serial()
@@ -546,9 +544,9 @@ def main():
                 ser_buffer += ser.read(ser.in_waiting)
             ser_buffer = parse_msp_response(ser_buffer)
 
-            # 3. Application de la logique de contrôle
+            # 3. Application de la logique de contrôle (Mode auto supprimé)
             if joystick_connected:
-                # Gestion des modes de vol automatiques
+                # Gestion des modes de vol automatiques (si ils sont activés par d'autres moyens)
                 if is_armed_command and current_flight_state != STATE_MANUAL:
                     manage_auto_flight_modes()
 
