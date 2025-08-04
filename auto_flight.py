@@ -48,7 +48,7 @@ AXIS_PITCH = 4      # Joystick Droit Y (pour Pitch)
 AXIS_R2 = 5         # Gâchette R2 (non utilisée pour le throttle maintenant)
 
 BUTTON_ARM_DISARM = 4 # Souvent L1/LB
-BUTTON_QUIT = 5       # Souvent R1/RB (Attention, R1 était BUTTON_TOGGLE_YAW_LOCK dans l'original)
+BUTTON_QUIT = 5       # Souvent R1/RB
 BUTTON_AUTO_MODE = 2  # Souvent X ou Carré
 BUTTON_ALTHOLD = 3    # Souvent Y ou Triangle (ex-BUTTON_FLIP)
 BUTTON_TOGGLE_YAW_LOCK = 6 # Souvent Bouton Select/Back
@@ -277,14 +277,6 @@ def handle_joystick_event(event):
                 althold_active = False
                 current_rc_values[5] = 1000  # AUX2 à 1000 (index 5 = canal 6 = AUX2)
                 print("\nCOMMANDE: DESARMEMENT")
-        
-        elif event.button == BUTTON_TOGGLE_YAW_LOCK:
-            yaw_locked = not yaw_locked
-            if yaw_locked:
-                current_rc_values[3] = YAW_LOCK_VALUE
-                print("\nINFO: Yaw VERROUILLÉ")
-            else:
-                print("\nINFO: Yaw DÉVERROUILLÉ")
 
         elif event.button == BUTTON_AUTO_MODE:
             if not is_armed_command: print("\nINFO: Armez d'abord pour le mode auto."); return None
@@ -364,7 +356,6 @@ def main():
     
     current_rc_values[3] = YAW_LOCK_VALUE 
     current_rc_values[5] = 1000  # AUX2 initialisé à 1000 (index 5 = canal 6 = AUX2)
-    yaw_locked = True
     althold_active = False
 
     print("--- Script Contrôle Drone MSP (Contrôle Joystick Gauche) ---")
