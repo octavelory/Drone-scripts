@@ -15,6 +15,8 @@ THROTTLE_TEST_MAX_VALUE = 1700
 BAUD_RATE = 115200
 MSP_SET_RAW_RC = 200
 MSP_ALTITUDE = 109
+MSP_RAW_GPS = 106
+MSP_COMP_GPS = 107
 
 # --- Configuration du Contrôle ---
 RC_CHANNELS_COUNT = 8
@@ -51,7 +53,6 @@ BUTTON_ARM_DISARM = 4 # Souvent L1/LB
 BUTTON_QUIT = 5       # Souvent R1/RB
 BUTTON_AUTO_MODE = 2  # Souvent X ou Carré
 BUTTON_ALTHOLD = 3    # Souvent Y ou Triangle (ex-BUTTON_FLIP)
-BUTTON_TOGGLE_YAW_LOCK = 6 # Souvent Bouton Select/Back
 
 JOYSTICK_DEADZONE = 0.08
 
@@ -68,8 +69,19 @@ STATE_PERFORMING_FLIP = 4
 current_flight_state = STATE_MANUAL
 
 current_altitude_m = None
+# Variables GPS
+gps_fix = False
+gps_num_sat = 0
+gps_lat = 0.0
+gps_lon = 0.0
+gps_altitude_m = 0.0
+gps_speed_ms = 0.0
+gps_ground_course = 0.0
+
 last_msp_request_time = 0
+last_gps_request_time = 0
 MSP_REQUEST_INTERVAL = 0.05
+GPS_REQUEST_INTERVAL = 0.5  # Demander le GPS moins souvent
 
 HOVER_THROTTLE_ESTIMATE = (THROTTLE_MIN_EFFECTIVE + THROTTLE_MAX_EFFECTIVE) // 2 + 50
 KP_ALTITUDE = 20.0
@@ -120,7 +132,7 @@ def request_msp_data(ser, command):
     send_msp_packet(ser, command, None)
 
 def parse_msp_response(ser_buffer):
-    global current_altitude_m
+    global current_altitude_m, gps_fix, gps_num_sat, gps_lat, gps_lon, gps_altitude_m, gps_speed_ms, gps_ground_course
     idx = ser_buffer.find(b'$M>')
     if idx == -1: return ser_buffer
     if len(ser_buffer) < idx + 5: return ser_buffer[idx:]
@@ -135,6 +147,15 @@ def parse_msp_response(ser_buffer):
         if cmd == MSP_ALTITUDE and payload_size >= 4:
             altitude_cm = struct.unpack('<i', payload_data[0:4])[0]
             current_altitude_m = float(altitude_cm) / 100.0
+        elif cmd == MSP_RAW_GPS and payload_size >= 16:
+            # MSP_RAW_GPS: fix, numSat, lat, lon, alt, speed, ground_course
+            gps_fix = payload_data[0] > 0
+            gps_num_sat = payload_data[1]
+            gps_lat = struct.unpack('<i', payload_data[2:6])[0] / 10000000.0
+            gps_lon = struct.unpack('<i', payload_data[6:10])[0] / 10000000.0
+            gps_altitude_m = struct.unpack('<h', payload_data[10:12])[0]
+            gps_speed_ms = struct.unpack('<H', payload_data[12:14])[0] / 100.0
+            gps_ground_course = struct.unpack('<H', payload_data[14:16])[0] / 10.0
         return ser_buffer[idx+6+payload_size:]
     else:
         return ser_buffer[idx+1:]
@@ -322,12 +343,16 @@ def print_status():
     throttle_mode_str = "TEST" if ENABLE_THROTTLE_TEST_LIMIT else "FULL"
     yaw_lock_str = "L" if yaw_locked else "U"
     althold_str = "ON" if althold_active else "OFF"
+    
+    # GPS status
+    gps_fix_str = "FIX" if gps_fix else "NO"
+    gps_sat_str = f"{gps_num_sat}sat"
 
     status_line = (
         f"R:{current_rc_values[0]} P:{current_rc_values[1]} T:{current_rc_values[2]}({throttle_mode_str}) Y:{current_rc_values[3]}({yaw_lock_str}) | "
         f"ARM:{current_rc_values[4]}({'Y' if is_armed_command else 'N'}) | ACRO:{current_rc_values[ACRO_MODE_CHANNEL_INDEX]} | "
         f"ALTHOLD:{current_rc_values[5]}({althold_str}) | "
-        f"Alt:{alt_str} | St:{state_str}"
+        f"Alt:{alt_str} | GPS:{gps_fix_str}({gps_sat_str}) | St:{state_str}"
     )
     if current_flight_state == STATE_PERFORMING_FLIP:
         status_line += f" FlipPh:{flip_phase}"
@@ -337,7 +362,7 @@ def print_status():
 
 def main():
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
-    global last_msp_request_time, current_altitude_m
+    global last_msp_request_time, last_gps_request_time, current_altitude_m
     global THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, HOVER_THROTTLE_ESTIMATE, THROTTLE_SAFETY_ARM, TAKEOFF_THROTTLE_CEILING
     global yaw_locked, althold_active
 
@@ -392,10 +417,16 @@ def main():
                     running = False; break
             if not running: break
 
-            # 2. Communication MSP (Lecture Altitude)
-            if time.time() - last_msp_request_time > MSP_REQUEST_INTERVAL:
+            # 2. Communication MSP (Lecture Altitude et GPS)
+            current_time = time.time()
+            if current_time - last_msp_request_time > MSP_REQUEST_INTERVAL:
                 request_msp_data(ser, MSP_ALTITUDE) 
-                last_msp_request_time = time.time()
+                last_msp_request_time = current_time
+            
+            # Demander les données GPS moins fréquemment
+            if current_time - last_gps_request_time > GPS_REQUEST_INTERVAL:
+                request_msp_data(ser, MSP_RAW_GPS)
+                last_gps_request_time = current_time
             
             if ser.in_waiting > 0:
                 ser_buffer += ser.read(ser.in_waiting)
