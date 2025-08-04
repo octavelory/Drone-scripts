@@ -5,6 +5,40 @@ import sys
 import os
 import pygame
 
+# --- COULEURS ET INTERFACE ---
+class Colors:
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    
+    # Couleurs de base
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    WHITE = '\033[97m'
+    GRAY = '\033[90m'
+    
+    # Couleurs de fond
+    BG_RED = '\033[101m'
+    BG_GREEN = '\033[102m'
+    BG_YELLOW = '\033[103m'
+    BG_BLUE = '\033[104m'
+
+def clear_screen():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+def move_cursor(line, col):
+    print(f'\033[{line};{col}H', end='')
+
+def hide_cursor():
+    print('\033[?25l', end='')
+
+def show_cursor():
+    print('\033[?25h', end='')
+
 # --- Configuration Globale ---
 ENABLE_THROTTLE_TEST_LIMIT = False # Mettre à False pour utiliser la pleine poussée (1000-2000)
 THROTTLE_TEST_MIN_VALUE = 1000
@@ -148,14 +182,15 @@ def parse_msp_response(ser_buffer):
             altitude_cm = struct.unpack('<i', payload_data[0:4])[0]
             current_altitude_m = float(altitude_cm) / 100.0
         elif cmd == MSP_RAW_GPS and payload_size >= 16:
-            # Parse GPS data: fix, numSat, lat, lon, alt, speed, ground_course
+            # Parse GPS data silently to avoid spam
             gps_fix = payload_data[0] != 0
             gps_num_sat = payload_data[1]
-            gps_latitude = struct.unpack('<i', payload_data[2:6])[0] / 10000000.0
-            gps_longitude = struct.unpack('<i', payload_data[6:10])[0] / 10000000.0
-            gps_altitude = struct.unpack('<h', payload_data[10:12])[0]
-            gps_speed = struct.unpack('<h', payload_data[12:14])[0]
-            gps_ground_course = struct.unpack('<h', payload_data[14:16])[0] / 10.0
+            if payload_size >= 16:  # Additional safety check
+                gps_latitude = struct.unpack('<i', payload_data[2:6])[0] / 10000000.0
+                gps_longitude = struct.unpack('<i', payload_data[6:10])[0] / 10000000.0
+                gps_altitude = struct.unpack('<h', payload_data[10:12])[0]
+                gps_speed = struct.unpack('<h', payload_data[12:14])[0]
+                gps_ground_course = struct.unpack('<h', payload_data[14:16])[0] / 10.0
         return ser_buffer[idx+6+payload_size:]
     else:
         return ser_buffer[idx+1:]
@@ -259,6 +294,115 @@ def manage_auto_flight_modes():
     elif current_flight_state == STATE_PERFORMING_FLIP:
         manage_flip_sequence()
 
+def print_banner():
+    clear_screen()
+    banner = f"""
+{Colors.CYAN}{Colors.BOLD}╔════════════════════════════════════════════════════════════════════════════════╗
+║                           🚁 CONTRÔLE DRONE MSP 🚁                            ║
+╚════════════════════════════════════════════════════════════════════════════════╝{Colors.RESET}
+
+{Colors.YELLOW}Mode Throttle: {Colors.GREEN if not ENABLE_THROTTLE_TEST_LIMIT else Colors.RED}{"COMPLET (1000-2000)" if not ENABLE_THROTTLE_TEST_LIMIT else f"TEST ({THROTTLE_MIN_EFFECTIVE}-{THROTTLE_MAX_EFFECTIVE})"}{Colors.RESET}
+{Colors.YELLOW}Sécurité Armement: {Colors.CYAN}≤ {THROTTLE_SAFETY_ARM}{Colors.RESET}
+
+{Colors.BOLD}CONTRÔLES:{Colors.RESET}
+{Colors.GREEN}├─ Joystick Gauche:{Colors.RESET} Y=Throttle, X=Yaw (verrouillé par défaut)
+{Colors.GREEN}├─ Joystick Droit:{Colors.RESET} X=Roll, Y=Pitch  
+{Colors.GREEN}├─ L1/LB:{Colors.RESET} Armer/Désarmer
+{Colors.GREEN}├─ X/Carré:{Colors.RESET} Mode Auto (Décollage/Atterrissage)
+{Colors.GREEN}├─ Y/Triangle:{Colors.RESET} Mode ALTHOLD (maintenir)
+{Colors.GREEN}└─ R1/RB:{Colors.RESET} Quitter
+
+{Colors.RED}{Colors.BOLD}⚠️  ATTENTION: Déconnexion manette = Arrêt automatique du script{Colors.RESET}
+"""
+    print(banner)
+
+def print_status_display():
+    # Position du curseur pour l'affichage dynamique
+    move_cursor(20, 1)
+    
+    # Effacer les lignes suivantes
+    for i in range(10):
+        print(" " * 100)
+    
+    move_cursor(20, 1)
+    
+    # === SECTION CONTRÔLES ===
+    print(f"{Colors.BOLD}{Colors.BLUE}╔══════════════════════════════════════════════════════════════════════════════╗{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}CONTRÔLES{Colors.RESET}                                                                    {Colors.BOLD}{Colors.BLUE}║{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.BLUE}╠══════════════════════════════════════════════════════════════════════════════╣{Colors.RESET}")
+    
+    # Ligne des contrôles
+    roll_color = Colors.GREEN if 1400 <= current_rc_values[0] <= 1600 else Colors.YELLOW
+    pitch_color = Colors.GREEN if 1400 <= current_rc_values[1] <= 1600 else Colors.YELLOW
+    throttle_color = Colors.RED if current_rc_values[2] < 1200 else Colors.YELLOW if current_rc_values[2] < 1400 else Colors.GREEN
+    yaw_color = Colors.CYAN if yaw_locked else Colors.YELLOW
+    
+    throttle_mode = "TEST" if ENABLE_THROTTLE_TEST_LIMIT else "FULL"
+    yaw_status = "🔒" if yaw_locked else "🔓"
+    
+    print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}Roll:{Colors.RESET} {roll_color}{current_rc_values[0]:4d}{Colors.RESET} │ " + 
+          f"{Colors.BOLD}Pitch:{Colors.RESET} {pitch_color}{current_rc_values[1]:4d}{Colors.RESET} │ " +
+          f"{Colors.BOLD}Throttle:{Colors.RESET} {throttle_color}{current_rc_values[2]:4d}{Colors.RESET}{Colors.GRAY}({throttle_mode}){Colors.RESET} │ " +
+          f"{Colors.BOLD}Yaw:{Colors.RESET} {yaw_color}{current_rc_values[3]:4d}{Colors.RESET}{yaw_status} {Colors.BOLD}{Colors.BLUE}║{Colors.RESET}")
+    
+    # === SECTION ÉTAT DRONE ===
+    print(f"{Colors.BOLD}{Colors.BLUE}╠══════════════════════════════════════════════════════════════════════════════╣{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}ÉTAT DRONE{Colors.RESET}                                                                   {Colors.BOLD}{Colors.BLUE}║{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.BLUE}╠══════════════════════════════════════════════════════════════════════════════╣{Colors.RESET}")
+    
+    # État d'armement
+    arm_color = Colors.GREEN if is_armed_command else Colors.RED
+    arm_status = "🟢 ARMÉ" if is_armed_command else "🔴 DÉSARMÉ"
+    arm_value = current_rc_values[4]
+    
+    # Mode ALTHOLD
+    althold_color = Colors.GREEN if althold_active else Colors.GRAY
+    althold_status = "🟢 ACTIF" if althold_active else "⚪ INACTIF"
+    althold_value = current_rc_values[5]
+    
+    # Altitude
+    alt_str = f"{current_altitude_m:.2f}m" if current_altitude_m is not None else "N/A"
+    alt_color = Colors.GREEN if current_altitude_m is not None else Colors.RED
+    
+    print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}ARM:{Colors.RESET} {arm_color}{arm_status}{Colors.RESET} {Colors.GRAY}({arm_value}){Colors.RESET} │ " +
+          f"{Colors.BOLD}ALTHOLD:{Colors.RESET} {althold_color}{althold_status}{Colors.RESET} {Colors.GRAY}({althold_value}){Colors.RESET} │ " +
+          f"{Colors.BOLD}Altitude:{Colors.RESET} {alt_color}{alt_str}{Colors.RESET} {Colors.BOLD}{Colors.BLUE}║{Colors.RESET}")
+    
+    # === SECTION GPS ===
+    gps_fix_color = Colors.GREEN if gps_fix else Colors.RED
+    gps_fix_status = "🛰️ FIX" if gps_fix else "❌ NO FIX"
+    sat_color = Colors.GREEN if gps_num_sat >= 6 else Colors.YELLOW if gps_num_sat >= 4 else Colors.RED
+    
+    print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}GPS:{Colors.RESET} {gps_fix_color}{gps_fix_status}{Colors.RESET} │ " +
+          f"{Colors.BOLD}Satellites:{Colors.RESET} {sat_color}{gps_num_sat:2d}{Colors.RESET} │ " +
+          f"{Colors.BOLD}Vitesse:{Colors.RESET} {Colors.CYAN}{gps_speed:3d}cm/s{Colors.RESET}                    {Colors.BOLD}{Colors.BLUE}║{Colors.RESET}")
+    
+    # === SECTION MODE DE VOL ===
+    print(f"{Colors.BOLD}{Colors.BLUE}╠══════════════════════════════════════════════════════════════════════════════╣{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}MODE DE VOL{Colors.RESET}                                                                {Colors.BOLD}{Colors.BLUE}║{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.BLUE}╚══════════════════════════════════════════════════════════════════════════════╝{Colors.RESET}")
+    
+    # État du mode de vol
+    state_names = ["🎮 MANUEL", "🚀 DÉCOLLAGE AUTO", "🚁 VOL STATIONNAIRE", "🛬 ATTERRISSAGE AUTO", "🌀 FLIP"]
+    state_colors = [Colors.CYAN, Colors.YELLOW, Colors.GREEN, Colors.MAGENTA, Colors.RED]
+    
+    if 0 <= current_flight_state < len(state_names):
+        state_str = state_names[current_flight_state]
+        state_color = state_colors[current_flight_state]
+    else:
+        state_str = "❓ INCONNU"
+        state_color = Colors.RED
+    
+    flip_info = f" (Phase {flip_phase})" if current_flight_state == STATE_PERFORMING_FLIP else ""
+    
+    print(f"  {Colors.BOLD}État Actuel:{Colors.RESET} {state_color}{Colors.BOLD}{state_str}{Colors.RESET}{flip_info}")
+    
+    # Coordonnées GPS si disponibles
+    if gps_fix and gps_latitude != 0 and gps_longitude != 0:
+        print(f"  {Colors.BOLD}Position:{Colors.RESET} {Colors.CYAN}{gps_latitude:.6f}°, {gps_longitude:.6f}°{Colors.RESET}")
+    
+    print() # Ligne vide finale
+
 def handle_joystick_event(event):
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
     global flip_start_time, flip_phase, previous_flight_mode_rc_value
@@ -270,95 +414,66 @@ def handle_joystick_event(event):
                 if not yaw_locked:
                     current_rc_values[3] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_THROTTLE:
-                # Contrôle du throttle avec le joystick gauche Y (inversé pour que haut = plus de puissance)
                 current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
             elif event.axis == AXIS_ROLL:
                 current_rc_values[0] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_PITCH:
                 current_rc_values[1] = map_axis_to_rc(event.value, inverted=True)
     
-    # S'assurer que le yaw reste verrouillé si activé
     if yaw_locked:
         current_rc_values[3] = YAW_LOCK_VALUE
 
     if event.type == pygame.JOYBUTTONDOWN:
         if event.button == BUTTON_ARM_DISARM:
             if not is_armed_command:
-                # Vérifie si la poussée actuelle (par défaut 1300) est inférieure à la sécurité (1350)
                 if current_rc_values[2] <= THROTTLE_SAFETY_ARM:
                     current_rc_values[4] = ARM_VALUE; is_armed_command = True
-                    print("\nCOMMANDE: ARMEMENT")
-                else: print(f"\nSECURITE: Gaz ({current_rc_values[2]}) > {THROTTLE_SAFETY_ARM} pour armer.")
+                else: 
+                    # Message d'erreur temporaire
+                    move_cursor(35, 1)
+                    print(f"{Colors.RED}{Colors.BOLD}⚠️  SÉCURITÉ: Throttle trop élevé ({current_rc_values[2]} > {THROTTLE_SAFETY_ARM}){Colors.RESET}")
             else: 
                 current_rc_values[4] = DISARM_VALUE; is_armed_command = False
-                # Lors du désarmement, on remet la poussée au minimum de sécurité (1300)
                 current_rc_values[2] = THROTTLE_MIN_EFFECTIVE
                 current_flight_state = STATE_MANUAL 
-                # Désactiver ALTHOLD lors du désarmement
                 althold_active = False
-                current_rc_values[5] = 1000  # AUX2 à 1000 (index 5 = canal 6 = AUX2)
-                print("\nCOMMANDE: DESARMEMENT")
+                current_rc_values[5] = 1000
 
         elif event.button == BUTTON_AUTO_MODE:
-            if not is_armed_command: print("\nINFO: Armez d'abord pour le mode auto."); return None
+            if not is_armed_command: 
+                move_cursor(35, 1)
+                print(f"{Colors.YELLOW}{Colors.BOLD}ℹ️  Armez d'abord le drone pour utiliser le mode auto{Colors.RESET}")
+                return None
             if current_flight_state == STATE_MANUAL:
                 if current_altitude_m is not None and current_altitude_m < (TARGET_ALTITUDE_M / 2):
                     current_flight_state = STATE_AUTO_TAKEOFF
-                else: print("\nINFO: Décollage auto non initié (altitude?).")
             elif current_flight_state == STATE_AUTO_HOVER or current_flight_state == STATE_AUTO_TAKEOFF:
                 current_flight_state = STATE_AUTO_LANDING
             elif current_flight_state == STATE_AUTO_LANDING:
                 current_flight_state = STATE_AUTO_HOVER
         
         elif event.button == BUTTON_ALTHOLD:
-            # Activer ALTHOLD mode (AUX2 à 1800)
             althold_active = True
-            current_rc_values[5] = 1800  # AUX2 (index 5 = canal 6 = AUX2)
-            print("\nINFO: Mode ALTHOLD ACTIVÉ")
+            current_rc_values[5] = 1800
         
         elif event.button == BUTTON_QUIT: return "quit"
 
     elif event.type == pygame.JOYBUTTONUP:
         if event.button == BUTTON_ALTHOLD:
-            # Désactiver ALTHOLD mode (AUX2 à 1000)
             althold_active = False
-            current_rc_values[5] = 1000  # AUX2 à 1000 (index 5 = canal 6 = AUX2)
-            print("\nINFO: Mode ALTHOLD DÉSACTIVÉ")
+            current_rc_values[5] = 1000
 
     elif event.type == pygame.JOYDEVICEADDED:
         if pygame.joystick.get_count() > 0:
             joystick = pygame.joystick.Joystick(0); joystick.init(); joystick_connected = True
-            print(f"\nManette '{joystick.get_name()}' connectée.")
     elif event.type == pygame.JOYDEVICEREMOVED:
-        print("\nMANETTE DÉCONNECTÉE - ARRÊT DU SCRIPT POUR SÉCURITÉ")
-        return "quit"  # Terminer le script immédiatement
+        move_cursor(35, 1)
+        print(f"{Colors.RED}{Colors.BOLD}🚨 MANETTE DÉCONNECTÉE - ARRÊT IMMÉDIAT{Colors.RESET}")
+        return "quit"
     return None
 
 def print_status():
-    sys.stdout.write("\033[K") # Efface la ligne
-    alt_str = f"{current_altitude_m:.2f}m" if current_altitude_m is not None else "N/A"
-    state_list = ["MANUAL", "TAKEOFF", "HOVER", "LANDING", "FLIPPING"]
-    state_str = state_list[current_flight_state] if 0 <= current_flight_state < len(state_list) else "UNKNOWN"
-    
-    throttle_mode_str = "TEST" if ENABLE_THROTTLE_TEST_LIMIT else "FULL"
-    yaw_lock_str = "L" if yaw_locked else "U"
-    althold_str = "ON" if althold_active else "OFF"
-    
-    # Format GPS status
-    gps_fix_str = "FIX" if gps_fix else "NO"
-    gps_status_str = f"GPS:{gps_fix_str}({gps_num_sat}sat)"
-
-    status_line = (
-        f"R:{current_rc_values[0]} P:{current_rc_values[1]} T:{current_rc_values[2]}({throttle_mode_str}) Y:{current_rc_values[3]}({yaw_lock_str}) | "
-        f"ARM:{current_rc_values[4]}({'Y' if is_armed_command else 'N'}) | ACRO:{current_rc_values[ACRO_MODE_CHANNEL_INDEX]} | "
-        f"ALTHOLD:{current_rc_values[5]}({althold_str}) | "
-        f"Alt:{alt_str} | {gps_status_str} | St:{state_str}"
-    )
-    if current_flight_state == STATE_PERFORMING_FLIP:
-        status_line += f" FlipPh:{flip_phase}"
-    
-    print(status_line, end="\r")
-    sys.stdout.flush()
+    print_status_display()
 
 def main():
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
@@ -460,16 +575,21 @@ def main():
                 send_msp_packet(ser, MSP_SET_RAW_RC, payload_rc)
                 print_status()
             else:
-                # Si on arrive ici, c'est que la manette était connectée mais ne l'est plus
-                print("\nMANETTE DÉCONNECTÉE - ARRÊT IMMÉDIAT DU SCRIPT")
+                move_cursor(35, 1)
+                print(f"{Colors.RED}{Colors.BOLD}🚨 MANETTE DÉCONNECTÉE - ARRÊT IMMÉDIAT{Colors.RESET}")
                 running = False
             
-            time.sleep(0.02) # Boucle à ~50Hz
+            time.sleep(0.02)
 
-    except KeyboardInterrupt: print("\nArrêt Ctrl+C.")
-    except Exception as e: print(f"\nErreur inattendue: {e}")
+    except KeyboardInterrupt: 
+        move_cursor(35, 1)
+        print(f"\n{Colors.YELLOW}Arrêt par Ctrl+C{Colors.RESET}")
+    except Exception as e: 
+        move_cursor(35, 1)
+        print(f"\n{Colors.RED}Erreur: {e}{Colors.RESET}")
     finally:
-        print("\nNettoyage et commandes de sécurité finales...")
+        show_cursor()
+        print(f"\n{Colors.CYAN}Nettoyage et arrêt sécurisé...{Colors.RESET}")
         final_rc = [1500]*RC_CHANNELS_COUNT
         # Utiliser la poussée minimale absolue (1000) pour la sécurité finale
         final_rc[2] = 1000 
