@@ -36,6 +36,15 @@ THROTTLE_SAFETY_ARM = THROTTLE_MIN_EFFECTIVE + 50
 # État du drone
 is_armed_command = False
 
+# --- Variables GPS ---
+gps_fix = False
+gps_num_sat = 0
+gps_latitude = 0
+gps_longitude = 0
+gps_altitude = 0
+gps_speed = 0
+gps_ground_course = 0
+
 # --- Configuration Verrouillage Yaw ---
 yaw_locked = False # Yaw verrouillé par défaut au démarrage
 YAW_LOCK_VALUE = 1500 # Valeur du yaw lorsqu'il est verrouillé
@@ -69,19 +78,10 @@ STATE_PERFORMING_FLIP = 4
 current_flight_state = STATE_MANUAL
 
 current_altitude_m = None
-# Variables GPS
-gps_fix = False
-gps_num_sat = 0
-gps_lat = 0.0
-gps_lon = 0.0
-gps_altitude_m = 0.0
-gps_speed_ms = 0.0
-gps_ground_course = 0.0
-
 last_msp_request_time = 0
 last_gps_request_time = 0
 MSP_REQUEST_INTERVAL = 0.05
-GPS_REQUEST_INTERVAL = 0.5  # Demander le GPS moins souvent
+GPS_REQUEST_INTERVAL = 0.5  # Requête GPS moins fréquente
 
 HOVER_THROTTLE_ESTIMATE = (THROTTLE_MIN_EFFECTIVE + THROTTLE_MAX_EFFECTIVE) // 2 + 50
 KP_ALTITUDE = 20.0
@@ -132,7 +132,7 @@ def request_msp_data(ser, command):
     send_msp_packet(ser, command, None)
 
 def parse_msp_response(ser_buffer):
-    global current_altitude_m, gps_fix, gps_num_sat, gps_lat, gps_lon, gps_altitude_m, gps_speed_ms, gps_ground_course
+    global current_altitude_m, gps_fix, gps_num_sat, gps_latitude, gps_longitude, gps_altitude, gps_speed, gps_ground_course
     idx = ser_buffer.find(b'$M>')
     if idx == -1: return ser_buffer
     if len(ser_buffer) < idx + 5: return ser_buffer[idx:]
@@ -148,14 +148,14 @@ def parse_msp_response(ser_buffer):
             altitude_cm = struct.unpack('<i', payload_data[0:4])[0]
             current_altitude_m = float(altitude_cm) / 100.0
         elif cmd == MSP_RAW_GPS and payload_size >= 16:
-            # MSP_RAW_GPS: fix, numSat, lat, lon, alt, speed, ground_course
-            gps_fix = payload_data[0] > 0
+            # Parse GPS data: fix, numSat, lat, lon, alt, speed, ground_course
+            gps_fix = payload_data[0] != 0
             gps_num_sat = payload_data[1]
-            gps_lat = struct.unpack('<i', payload_data[2:6])[0] / 10000000.0
-            gps_lon = struct.unpack('<i', payload_data[6:10])[0] / 10000000.0
-            gps_altitude_m = struct.unpack('<h', payload_data[10:12])[0]
-            gps_speed_ms = struct.unpack('<H', payload_data[12:14])[0] / 100.0
-            gps_ground_course = struct.unpack('<H', payload_data[14:16])[0] / 10.0
+            gps_latitude = struct.unpack('<i', payload_data[2:6])[0] / 10000000.0
+            gps_longitude = struct.unpack('<i', payload_data[6:10])[0] / 10000000.0
+            gps_altitude = struct.unpack('<h', payload_data[10:12])[0]
+            gps_speed = struct.unpack('<h', payload_data[12:14])[0]
+            gps_ground_course = struct.unpack('<h', payload_data[14:16])[0] / 10.0
         return ser_buffer[idx+6+payload_size:]
     else:
         return ser_buffer[idx+1:]
@@ -344,15 +344,15 @@ def print_status():
     yaw_lock_str = "L" if yaw_locked else "U"
     althold_str = "ON" if althold_active else "OFF"
     
-    # GPS status
+    # Format GPS status
     gps_fix_str = "FIX" if gps_fix else "NO"
-    gps_sat_str = f"{gps_num_sat}sat"
+    gps_status_str = f"GPS:{gps_fix_str}({gps_num_sat}sat)"
 
     status_line = (
         f"R:{current_rc_values[0]} P:{current_rc_values[1]} T:{current_rc_values[2]}({throttle_mode_str}) Y:{current_rc_values[3]}({yaw_lock_str}) | "
         f"ARM:{current_rc_values[4]}({'Y' if is_armed_command else 'N'}) | ACRO:{current_rc_values[ACRO_MODE_CHANNEL_INDEX]} | "
         f"ALTHOLD:{current_rc_values[5]}({althold_str}) | "
-        f"Alt:{alt_str} | GPS:{gps_fix_str}({gps_sat_str}) | St:{state_str}"
+        f"Alt:{alt_str} | {gps_status_str} | St:{state_str}"
     )
     if current_flight_state == STATE_PERFORMING_FLIP:
         status_line += f" FlipPh:{flip_phase}"
@@ -423,7 +423,6 @@ def main():
                 request_msp_data(ser, MSP_ALTITUDE) 
                 last_msp_request_time = current_time
             
-            # Demander les données GPS moins fréquemment
             if current_time - last_gps_request_time > GPS_REQUEST_INTERVAL:
                 request_msp_data(ser, MSP_RAW_GPS)
                 last_gps_request_time = current_time
