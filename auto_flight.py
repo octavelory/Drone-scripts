@@ -206,8 +206,6 @@ def manage_auto_flight_modes():
         current_rc_values[0] = 1500; current_rc_values[1] = 1500
         if yaw_locked:
             current_rc_values[3] = YAW_LOCK_VALUE
-        else:
-            current_rc_values[3] = 1500
 
     if current_flight_state == STATE_AUTO_TAKEOFF:
         if current_altitude_m is None: return
