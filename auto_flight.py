@@ -106,7 +106,7 @@ SERVO1_PIN = 12
 SERVO2_PIN = 13
 MIN_PULSE = 0.5 / 1000
 MAX_PULSE = 2.5 / 1000
-SMOOTHING_FACTOR = 0.07
+SMOOTHING_FACTOR = 0.10
 
 # Variables globales pour les servos
 servo1 = None
@@ -487,8 +487,8 @@ def handle_joystick_event(event):
                 if not yaw_locked and not servo_control_active:
                     current_rc_values[3] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_THROTTLE:
-                if not servo_control_active:
-                    current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
+                # Le throttle fonctionne toujours, même en mode servo
+                current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
             elif event.axis == AXIS_ROLL:
                 if servo_control_active:
                     # En mode servo, contrôler le servo1 avec l'axe ROLL (joystick droit X)
@@ -552,9 +552,6 @@ def handle_joystick_event(event):
 
         elif event.button == BUTTON_SERVO_CONTROL:
             servo_control_active = False
-            # Remettre la caméra au centre quand on relâche le bouton
-            target_servo1_pos = 0.0
-            target_servo2_pos = 0.0
             move_cursor(35, 1)
             print(f"{Colors.CYAN}{Colors.BOLD}🎮 MODE CONTRÔLE DRONE RESTAURÉ{Colors.RESET}")
 
@@ -669,8 +666,15 @@ def main():
                 current_rc_values[2] = THROTTLE_MIN_EFFECTIVE # Retour à la poussée par défaut
 
             # Mise à jour des servos si le contrôle caméra est actif ou si on revient au centre
-            if servos_initialized and (servo_control_active or abs(target_servo1_pos) > 0.01 or abs(target_servo2_pos) > 0.01):
-                update_servos()
+            if servos_initialized:
+                # Si le mode servo n'est pas actif, forcer le retour au centre
+                if not servo_control_active:
+                    target_servo1_pos = 0.0
+                    target_servo2_pos = 0.0
+                
+                # Mettre à jour les servos si nécessaire (actif ou retour au centre)
+                if servo_control_active or abs(current_servo1_pos) > 0.01 or abs(current_servo2_pos) > 0.01:
+                    update_servos()
 
             # 4. Envoi des commandes RC et affichage
             if joystick_connected:
