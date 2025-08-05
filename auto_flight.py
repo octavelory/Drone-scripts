@@ -101,7 +101,7 @@ AXIS_R2 = 5         # Gâchette R2 (non utilisée pour le throttle maintenant)
 
 BUTTON_ARM_DISARM = 4 # L1/LB - Seul bouton utilisé
 BUTTON_ALTHOLD = 3    # Y/Triangle - Mode ALTHOLD (maintenir)
-BUTTON_SERVO_MODE = 7 # R2 - Mode contrôle servos
+BUTTON_SERVO_MODE = 5 # R2 - Mode contrôle servos
 # BUTTON_QUIT et BUTTON_AUTO_MODE supprimés - boutons 2 et 5 inutilisés
 
 JOYSTICK_DEADZONE = 0.08
