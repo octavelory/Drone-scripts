@@ -5,6 +5,7 @@ import time
 import sys
 import os
 import pygame
+from gpiozero import Servo
 
 # --- COULEURS ET INTERFACE ---
 class Colors:
@@ -95,9 +96,26 @@ AXIS_R2 = 5         # Gâchette R2 (non utilisée pour le throttle maintenant)
 
 BUTTON_ARM_DISARM = 4 # L1/LB - Seul bouton utilisé
 BUTTON_ALTHOLD = 3    # Y/Triangle - Mode ALTHOLD (maintenir)
+BUTTON_SERVO_CONTROL = 5 # Bouton pour activer le contrôle des servos
 # BUTTON_QUIT et BUTTON_AUTO_MODE supprimés - boutons 2 et 5 inutilisés
 
 JOYSTICK_DEADZONE = 0.08
+
+# --- Configuration Servos ---
+SERVO1_PIN = 12
+SERVO2_PIN = 13
+MIN_PULSE = 0.5 / 1000
+MAX_PULSE = 2.5 / 1000
+SMOOTHING_FACTOR = 0.07
+
+# Variables globales pour les servos
+servo1 = None
+servo2 = None
+servo_control_active = False
+target_servo1_pos = 0.0
+target_servo2_pos = 0.0
+current_servo1_pos = 0.0
+current_servo2_pos = 0.0
 
 # --- Configuration Vol Automatique (Inchangé) ---
 TARGET_ALTITUDE_M = 1.0
@@ -222,6 +240,55 @@ def map_axis_to_rc(axis_value, min_rc=1000, max_rc=2000, inverted=False):
     normalized_value = (axis_value + 1.0) / 2.0
     return int(min_rc + normalized_value * (max_rc - min_rc))
 
+# --- Fonctions de Contrôle des Servos ---
+def clamp(value, min_val=-1.0, max_val=1.0):
+    return max(min_val, min(value, max_val))
+
+def initialize_servos():
+    """Initialise les servos pour le contrôle de la caméra."""
+    global servo1, servo2, current_servo1_pos, current_servo2_pos
+    try:
+        servo1 = Servo(SERVO1_PIN, min_pulse_width=MIN_PULSE, max_pulse_width=MAX_PULSE)
+        servo2 = Servo(SERVO2_PIN, min_pulse_width=1/1000, max_pulse_width=2/1000)
+        
+        # Positionner les servos au centre au démarrage
+        current_servo1_pos = 0.0
+        current_servo2_pos = 0.0
+        servo1.value = current_servo1_pos
+        servo2.value = current_servo2_pos
+        
+        print("Servos initialisés pour le contrôle de caméra.")
+        return True
+    except Exception as e:
+        print(f"ERREUR lors de l'initialisation des servos : {e}")
+        return False
+
+def update_servos():
+    """Met à jour la position des servos avec lissage."""
+    global current_servo1_pos, current_servo2_pos, target_servo1_pos, target_servo2_pos
+    if servo1 is not None and servo2 is not None:
+        # Interpolation pour un mouvement fluide
+        current_servo1_pos += (target_servo1_pos - current_servo1_pos) * SMOOTHING_FACTOR
+        current_servo2_pos += (target_servo2_pos - current_servo2_pos) * SMOOTHING_FACTOR
+        
+        # Appliquer les nouvelles positions
+        servo1.value = current_servo1_pos
+        servo2.value = current_servo2_pos
+
+def cleanup_servos():
+    """Libère les ressources des servos."""
+    global servo1, servo2
+    try:
+        if servo1 is not None:
+            servo1.detach()
+        if servo2 is not None:
+            servo2.detach()
+    except Exception as e:
+        print(f"Erreur lors de la libération des servos: {e}")
+    finally:
+        servo1 = None
+        servo2 = None
+
 # --- Fonctions de Vol Automatique (Inchangées pour la plupart) ---
 def manage_flip_sequence():
     global current_rc_values, current_flight_state, flip_start_time, flip_phase, previous_flight_mode_rc_value
@@ -308,7 +375,8 @@ def print_banner():
 {Colors.GREEN}├─ Joystick Gauche:{Colors.RESET} Y=Throttle, X=Yaw (verrouillé par défaut)
 {Colors.GREEN}├─ Joystick Droit:{Colors.RESET} X=Roll, Y=Pitch  
 {Colors.GREEN}├─ L1/LB:{Colors.RESET} Armer/Désarmer (BOUTON PRINCIPAL)
-{Colors.GREEN}└─ Y/Triangle:{Colors.RESET} Mode ALTHOLD (maintenir)
+{Colors.GREEN}├─ Y/Triangle:{Colors.RESET} Mode ALTHOLD (maintenir)
+{Colors.GREEN}└─ Bouton 5:{Colors.RESET} Contrôle Caméra (Joystick Gauche → Servos)
 
 {Colors.RED}{Colors.BOLD}⚠️  ATTENTION: Déconnexion manette = Arrêt automatique du script{Colors.RESET}
 {Colors.YELLOW}{Colors.BOLD}ℹ️  Pour quitter: Ctrl+C{Colors.RESET}
@@ -359,6 +427,10 @@ def print_status_display():
     althold_status = "🟢 ACTIF" if althold_active else "⚪ INACTIF"
     althold_value = current_rc_values[5]
     
+    # Mode Servo Control
+    servo_color = Colors.CYAN if servo_control_active else Colors.GRAY
+    servo_status = "📹 CAMÉRA" if servo_control_active else "🎮 DRONE"
+    
     # Altitude
     alt_str = f"{current_altitude_m:.2f}m" if current_altitude_m is not None else "N/A"
     alt_color = Colors.GREEN if current_altitude_m is not None else Colors.RED
@@ -366,6 +438,8 @@ def print_status_display():
     print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}ARM:{Colors.RESET} {arm_color}{arm_status}{Colors.RESET} {Colors.GRAY}({arm_value}){Colors.RESET} │ " +
           f"{Colors.BOLD}ALTHOLD:{Colors.RESET} {althold_color}{althold_status}{Colors.RESET} {Colors.GRAY}({althold_value}){Colors.RESET} │ " +
           f"{Colors.BOLD}Altitude:{Colors.RESET} {alt_color}{alt_str}{Colors.RESET} {Colors.BOLD}{Colors.BLUE}║{Colors.RESET}")
+    
+    print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}Contrôle:{Colors.RESET} {servo_color}{servo_status}{Colors.RESET}                                                      {Colors.BOLD}{Colors.BLUE}║{Colors.RESET}")
     
     # === SECTION GPS ===
     gps_fix_color = Colors.GREEN if gps_fix else Colors.RED
@@ -405,19 +479,30 @@ def print_status_display():
 def handle_joystick_event(event):
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
     global flip_start_time, flip_phase, previous_flight_mode_rc_value
-    global yaw_locked, althold_active
+    global yaw_locked, althold_active, servo_control_active, target_servo1_pos, target_servo2_pos
 
     if current_flight_state == STATE_MANUAL:
         if event.type == pygame.JOYAXISMOTION:
             if event.axis == AXIS_YAW:
-                if not yaw_locked:
+                if servo_control_active:
+                    # En mode servo, contrôler le servo1 avec l'axe YAW (joystick gauche X)
+                    value = clamp(-event.value)
+                    target_servo1_pos = value if abs(value) > JOYSTICK_DEADZONE else 0.0
+                elif not yaw_locked:
                     current_rc_values[3] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_THROTTLE:
-                current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
+                if servo_control_active:
+                    # En mode servo, contrôler le servo2 avec l'axe THROTTLE (joystick gauche Y)
+                    value = clamp(-event.value)
+                    target_servo2_pos = value if abs(value) > JOYSTICK_DEADZONE else 0.0
+                else:
+                    current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
             elif event.axis == AXIS_ROLL:
-                current_rc_values[0] = map_axis_to_rc(event.value)
+                if not servo_control_active:
+                    current_rc_values[0] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_PITCH:
-                current_rc_values[1] = map_axis_to_rc(event.value, inverted=True)
+                if not servo_control_active:
+                    current_rc_values[1] = map_axis_to_rc(event.value, inverted=True)
     
     if yaw_locked:
         current_rc_values[3] = YAW_LOCK_VALUE
@@ -450,12 +535,25 @@ def handle_joystick_event(event):
             move_cursor(35, 1)
             print(f"{Colors.GREEN}{Colors.BOLD}🔒 MODE ALTHOLD ACTIVÉ{Colors.RESET}")
 
+        elif event.button == BUTTON_SERVO_CONTROL:
+            servo_control_active = True
+            # Mettre roll et pitch à la position neutre quand on active le contrôle des servos
+            current_rc_values[0] = 1500  # Roll neutre
+            current_rc_values[1] = 1500  # Pitch neutre
+            move_cursor(35, 1)
+            print(f"{Colors.CYAN}{Colors.BOLD}📹 MODE CONTRÔLE CAMÉRA ACTIVÉ{Colors.RESET}")
+
     elif event.type == pygame.JOYBUTTONUP:
         if event.button == BUTTON_ALTHOLD:
             althold_active = False
             current_rc_values[5] = 1000
             move_cursor(35, 1)
             print(f"{Colors.YELLOW}{Colors.BOLD}🔓 MODE ALTHOLD DÉSACTIVÉ{Colors.RESET}")
+
+        elif event.button == BUTTON_SERVO_CONTROL:
+            servo_control_active = False
+            move_cursor(35, 1)
+            print(f"{Colors.CYAN}{Colors.BOLD}🎮 MODE CONTRÔLE DRONE RESTAURÉ{Colors.RESET}")
 
     elif event.type == pygame.JOYDEVICEADDED:
         if pygame.joystick.get_count() > 0:
@@ -473,7 +571,7 @@ def main():
     global current_rc_values, is_armed_command, joystick, joystick_connected, current_flight_state
     global last_msp_request_time, last_gps_request_time, current_altitude_m
     global THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, HOVER_THROTTLE_ESTIMATE, THROTTLE_SAFETY_ARM, TAKEOFF_THROTTLE_CEILING
-    global yaw_locked, althold_active
+    global yaw_locked, althold_active, servo_control_active, servos_initialized
 
     # --- Initialisation des valeurs dynamiques ---
     THROTTLE_MIN_EFFECTIVE = THROTTLE_TEST_MIN_VALUE if ENABLE_THROTTLE_TEST_LIMIT else 1000
@@ -491,6 +589,8 @@ def main():
     current_rc_values[3] = YAW_LOCK_VALUE 
     current_rc_values[5] = 1000  # AUX2 initialisé à 1000 (index 5 = canal 6 = AUX2)
     althold_active = False
+    servo_control_active = False
+    servos_initialized = False
 
     print("--- Script Contrôle Drone MSP (Contrôle Simplifié) ---")
     if ENABLE_THROTTLE_TEST_LIMIT: print(f"!!! MODE TEST THROTTLE ACTIF: {THROTTLE_MIN_EFFECTIVE}-{THROTTLE_MAX_EFFECTIVE} !!!")
@@ -514,6 +614,11 @@ def main():
     # Afficher la bannière après l'initialisation
     print_banner()
     hide_cursor()
+
+    # --- Initialisation des Servos ---
+    servos_initialized = initialize_servos()
+    if not servos_initialized:
+        print("Attention: Les servos n'ont pas pu être initialisés, le contrôle caméra sera désactivé.")
 
     # --- NOUVEAU: Initialisation Port Série ---
     ser = initialize_serial()
@@ -560,6 +665,10 @@ def main():
                 current_flight_state = STATE_MANUAL
                 current_rc_values[2] = THROTTLE_MIN_EFFECTIVE # Retour à la poussée par défaut
 
+            # Mise à jour des servos si le contrôle caméra est actif
+            if servo_control_active and servos_initialized:
+                update_servos()
+
             # 4. Envoi des commandes RC et affichage
             if joystick_connected:
                 # Clamping des valeurs RC
@@ -589,6 +698,12 @@ def main():
     finally:
         show_cursor()
         print(f"\n{Colors.CYAN}Nettoyage et arrêt sécurisé...{Colors.RESET}")
+        
+        # Nettoyage des servos
+        if servos_initialized:
+            cleanup_servos()
+            print("Servos libérés.")
+        
         final_rc = [1500]*RC_CHANNELS_COUNT
         # Utiliser la poussée minimale absolue (1000) pour la sécurité finale
         final_rc[2] = 1000 
