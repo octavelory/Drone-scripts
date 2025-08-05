@@ -376,7 +376,7 @@ def print_banner():
 {Colors.GREEN}├─ Joystick Droit:{Colors.RESET} X=Roll, Y=Pitch  
 {Colors.GREEN}├─ L1/LB:{Colors.RESET} Armer/Désarmer (BOUTON PRINCIPAL)
 {Colors.GREEN}├─ Y/Triangle:{Colors.RESET} Mode ALTHOLD (maintenir)
-{Colors.GREEN}└─ Bouton 5:{Colors.RESET} Contrôle Caméra (Joystick Gauche → Servos)
+{Colors.GREEN}└─ Bouton 5:{Colors.RESET} Contrôle Caméra (Joystick Droit → Servos)
 
 {Colors.RED}{Colors.BOLD}⚠️  ATTENTION: Déconnexion manette = Arrêt automatique du script{Colors.RESET}
 {Colors.YELLOW}{Colors.BOLD}ℹ️  Pour quitter: Ctrl+C{Colors.RESET}
@@ -484,24 +484,24 @@ def handle_joystick_event(event):
     if current_flight_state == STATE_MANUAL:
         if event.type == pygame.JOYAXISMOTION:
             if event.axis == AXIS_YAW:
-                if servo_control_active:
-                    # En mode servo, contrôler le servo1 avec l'axe YAW (joystick gauche X)
-                    value = clamp(-event.value)
-                    target_servo1_pos = value if abs(value) > JOYSTICK_DEADZONE else 0.0
-                elif not yaw_locked:
+                if not yaw_locked and not servo_control_active:
                     current_rc_values[3] = map_axis_to_rc(event.value)
             elif event.axis == AXIS_THROTTLE:
+                if not servo_control_active:
+                    current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
+            elif event.axis == AXIS_ROLL:
                 if servo_control_active:
-                    # En mode servo, contrôler le servo2 avec l'axe THROTTLE (joystick gauche Y)
+                    # En mode servo, contrôler le servo1 avec l'axe ROLL (joystick droit X)
+                    value = clamp(-event.value)
+                    target_servo1_pos = value if abs(value) > JOYSTICK_DEADZONE else 0.0
+                else:
+                    current_rc_values[0] = map_axis_to_rc(event.value)
+            elif event.axis == AXIS_PITCH:
+                if servo_control_active:
+                    # En mode servo, contrôler le servo2 avec l'axe PITCH (joystick droit Y)
                     value = clamp(-event.value)
                     target_servo2_pos = value if abs(value) > JOYSTICK_DEADZONE else 0.0
                 else:
-                    current_rc_values[2] = map_axis_to_rc(event.value, THROTTLE_MIN_EFFECTIVE, THROTTLE_MAX_EFFECTIVE, inverted=True)
-            elif event.axis == AXIS_ROLL:
-                if not servo_control_active:
-                    current_rc_values[0] = map_axis_to_rc(event.value)
-            elif event.axis == AXIS_PITCH:
-                if not servo_control_active:
                     current_rc_values[1] = map_axis_to_rc(event.value, inverted=True)
     
     if yaw_locked:
@@ -552,6 +552,9 @@ def handle_joystick_event(event):
 
         elif event.button == BUTTON_SERVO_CONTROL:
             servo_control_active = False
+            # Remettre la caméra au centre quand on relâche le bouton
+            target_servo1_pos = 0.0
+            target_servo2_pos = 0.0
             move_cursor(35, 1)
             print(f"{Colors.CYAN}{Colors.BOLD}🎮 MODE CONTRÔLE DRONE RESTAURÉ{Colors.RESET}")
 
@@ -665,8 +668,8 @@ def main():
                 current_flight_state = STATE_MANUAL
                 current_rc_values[2] = THROTTLE_MIN_EFFECTIVE # Retour à la poussée par défaut
 
-            # Mise à jour des servos si le contrôle caméra est actif
-            if servo_control_active and servos_initialized:
+            # Mise à jour des servos si le contrôle caméra est actif ou si on revient au centre
+            if servos_initialized and (servo_control_active or abs(target_servo1_pos) > 0.01 or abs(target_servo2_pos) > 0.01):
                 update_servos()
 
             # 4. Envoi des commandes RC et affichage
